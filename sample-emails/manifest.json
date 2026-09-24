@@ -1,0 +1,14 @@
+[
+  "01-legit/weekly-status-report.eml",
+  "02-brand-impersonation/paypal-account-verification.eml",
+  "03-lookalike-domain/invoice-from-paypaI-typosquat.eml",
+  "04-punycode-domain/security-alert-xn--punycode-sender.eml",
+  "05-bec-wire-fraud/ceo-urgent-wire-transfer-request.eml",
+  "06-auth-failures/spoofed-sender-spf-dmarc-fail.eml",
+  "07-risky-attachment/invoice-pdf-exe-dual-extension.eml",
+  "08-duplicate-campaign/mass-phishing-copy-1.eml",
+  "08-duplicate-campaign/mass-phishing-copy-2.eml",
+  "09-calendar-invite/quarterly-planning-sync-invite.eml",
+  "10-boolean-search-senders/paypal-payment-receipt.eml",
+  "10-boolean-search-senders/amazon-order-shipped.eml"
+]

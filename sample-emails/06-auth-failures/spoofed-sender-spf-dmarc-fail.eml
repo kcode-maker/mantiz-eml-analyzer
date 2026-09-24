@@ -1,0 +1,14 @@
+From: "IT Helpdesk" <helpdesk@example-corp.com>
+To: employee@example-corp.com
+Subject: Password expires today - action required
+Date: Sat, 20 Jan 2024 08:00:00 +0000
+Message-ID: <it-helpdesk-2201@mail-relay-99.ru>
+Authentication-Results: mx.example-corp.com; spf=fail smtp.mailfrom=mail-relay-99.ru; dkim=fail; dmarc=fail header.from=example-corp.com
+Content-Type: text/plain; charset=utf-8
+
+Your password expires today. To avoid losing access, please confirm
+your credentials using the link below within the next hour.
+
+Failure to comply will result in your account being disabled.
+
+IT Helpdesk

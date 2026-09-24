@@ -1,0 +1,15 @@
+From: "PayPal" <receipts@paypal.com>
+To: jane.doe@example-corp.com
+Subject: Receipt for your payment to Acme Supplies
+Date: Tue, 23 Jan 2024 11:15:00 +0000
+Message-ID: <receipt-9f21@paypal.com>
+Content-Type: text/plain; charset=utf-8
+
+Hi Jane,
+
+This confirms your payment of $84.50 to Acme Supplies has been completed.
+
+Transaction ID: 9F21-XYZ
+Date: Jan 23, 2024
+
+Thanks for using PayPal.

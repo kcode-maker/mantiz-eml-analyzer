@@ -1,0 +1,14 @@
+From: "Amazon" <shipment-tracking@amazon.com>
+To: jane.doe@example-corp.com
+Subject: Your order has shipped
+Date: Tue, 23 Jan 2024 15:40:00 +0000
+Message-ID: <ship-4471@amazon.com>
+Content-Type: text/plain; charset=utf-8
+
+Hi Jane,
+
+Your order #112-4471-2200 is on its way and should arrive by Jan 26.
+
+Track your package: (tracking link omitted in this sample)
+
+Thanks for shopping with Amazon.

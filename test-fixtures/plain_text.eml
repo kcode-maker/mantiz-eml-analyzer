@@ -1,0 +1,22 @@
+Return-Path: <alice@example.com>
+Received: from mail.example.com (mail.example.com [203.0.113.10])
+	by mx.example.org with ESMTP id abc123
+	for <bob@example.org>; Mon, 12 Feb 2024 09:15:00 -0500
+From: Alice Anderson <alice@example.com>
+To: Bob Baker <bob@example.org>
+Cc: Carol Chen <carol@example.org>
+Subject: Quarterly report is ready
+Date: Mon, 12 Feb 2024 09:14:55 -0500
+Message-ID: <fixture-plain-0001@example.com>
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+Hi Bob,
+
+The quarterly report is attached to last week's email — just following up
+to confirm you received it okay.
+
+You can also grab a copy any time from https://reports.example.com/q1?id=42
+
+Thanks,
+Alice

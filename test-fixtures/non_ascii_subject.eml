@@ -1,0 +1,14 @@
+From: =?UTF-8?B?RnJhbsOnb2lzIE3DvGxsZXI=?= <francois@example.fr>
+To: bob@example.org
+Subject: =?UTF-8?B?Q2Fmw6kg4piVIEludm9pY2Ug4oCUIFLDqXN1bcOpIGF0dGFjaGVk?=
+Date: Thu, 15 Feb 2024 15:00:00 -0500
+Message-ID: <fixture-nonascii-0004@example.fr>
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+Bonjour,
+
+Voici la facture pour le caf=C3=A9 command=C3=A9 hier: 42,50=E2=82=AC.
+
+Merci,
+Fran=C3=A7ois

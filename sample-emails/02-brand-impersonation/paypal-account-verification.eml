@@ -1,0 +1,19 @@
+From: "PayPal Support" <support-team@account-verify-secure.net>
+To: victim@example-corp.com
+Subject: Your account has been limited
+Date: Tue, 16 Jan 2024 03:12:00 +0000
+Message-ID: <a1b2c3d4@account-verify-secure.net>
+Authentication-Results: mx.example-corp.com; spf=fail smtp.mailfrom=account-verify-secure.net; dkim=none; dmarc=fail
+Content-Type: text/plain; charset=utf-8
+
+Dear Customer,
+
+We have detected unusual activity on your PayPal account and it has
+been limited. You must verify your account immediately or it will be
+permanently suspended.
+
+Click here to verify your account and restore access.
+
+This is an urgent matter that requires action within 24 hours.
+
+PayPal Security Team

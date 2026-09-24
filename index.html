@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mantiz-EML-Analyzer — Bulk Email Analyzer</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="ev-app">
+
+  <div id="ev-toolbar">
+    <button id="ev-btn-open-folder" class="ev-btn ev-btn-primary" title="Open a folder of .eml files"><span class="ev-icon"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 3.5a1 1 0 0 1 1-1h3.2l1.3 1.6h6.5a1 1 0 0 1 1 1v7.4a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-9z"/></svg></span> Open Folder</button>
+    <button id="ev-btn-open-files" class="ev-btn" title="Open loose .eml files"><span class="ev-icon"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg></span> Open Files</button>
+    <button id="ev-btn-resume" class="ev-btn" style="display:none" title="Resume your last session"></button>
+    <input id="ev-import-tags-input" type="file" accept="application/json" style="display:none">
+    <button id="ev-btn-settings" class="ev-icon-btn" title="Settings — trusted domains"><span class="ev-icon"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.6M8 12.8v1.6M14.4 8h-1.6M3.2 8H1.6M12.4 3.6l-1.13 1.13M4.73 11.27L3.6 12.4M12.4 12.4l-1.13-1.13M4.73 4.73L3.6 3.6" stroke-linecap="round"/></svg></span></button>
+  </div>
+
+  <div id="ev-resume-banner" class="ev-banner" style="display:none"></div>
+  <div id="ev-tags-sidecar-banner" class="ev-banner" style="display:none">
+    <span id="ev-tags-sidecar-text"></span>
+    <button id="ev-btn-load-tags-sidecar" class="ev-mini-btn">Load</button>
+    <button id="ev-btn-dismiss-tags-sidecar" class="ev-mini-btn" title="Dismiss">✕</button>
+  </div>
+  <div id="ev-demo-banner" class="ev-banner" style="display:none">
+    <span>New here? Load a folder of sample emails to see every feature in action.</span>
+    <button id="ev-btn-load-demo" class="ev-mini-btn">Load sample emails</button>
+    <label class="ev-inline-check"><input type="checkbox" id="ev-demo-always-show"> Show this again next time</label>
+    <button id="ev-btn-dismiss-demo" class="ev-mini-btn" title="Dismiss">✕</button>
+  </div>
+
+  <div id="ev-main">
+    <div id="ev-sidebar">
+      <div id="ev-sidebar-tabs">
+        <button class="ev-sidebar-tab active" data-view="explorer">Explorer</button>
+        <button class="ev-sidebar-tab" data-view="search">Search</button>
+        <button class="ev-sidebar-tab" data-view="tags">Tags</button>
+        <button class="ev-sidebar-tab" data-view="rules">Rules</button>
+      </div>
+
+      <div id="ev-view-explorer" class="ev-sidebar-view active">
+        <div id="ev-tree-root-label" title="Browsers never reveal the full OS path of a picked folder — this is the folder's own name, as a tree root.">No folder open</div>
+        <div id="ev-tree-toolbar">
+          <button id="ev-btn-collapse-all" class="ev-tree-tool-btn" title="Collapse All">⊟</button>
+          <button id="ev-btn-expand-all" class="ev-tree-tool-btn" title="Expand All">⊞</button>
+          <select id="ev-tree-sort" title="Sort">
+            <option value="asc">Name (A→Z)</option>
+            <option value="desc">Name (Z→A)</option>
+          </select>
+          <select id="ev-file-filter-mode" title="Which files in this folder count as emails. &quot;All files&quot; also treats extensionless files as email (for messages renamed to a hash) but still skips known non-email types like .json/.txt/.png.">
+            <option value="emlOnly">.eml files only</option>
+            <option value="all">All files (as email)</option>
+          </select>
+        </div>
+        <input id="ev-tree-filter" type="text" placeholder="Filter files by name…">
+        <details id="ev-parse-errors" class="ev-collapsible" style="display:none; padding: 0 8px;">
+          <summary>⚠ <span id="ev-parse-errors-count">0</span> file(s) failed to parse</summary>
+          <div id="ev-parse-errors-list" class="ev-scroll-area" style="max-height:150px"></div>
+        </details>
+        <div id="ev-bulk-tag-bar" style="display:none">
+          <span id="ev-bulk-tag-count" class="ev-muted-small"></span>
+          <input id="ev-bulk-tag-input" type="text" placeholder="tag name…" title="Applies to every selected email at once.">
+          <button id="ev-btn-bulk-tag-apply" class="ev-mini-btn">Add tag</button>
+          <button id="ev-btn-bulk-tag-clear" class="ev-mini-btn">Clear</button>
+        </div>
+        <div id="ev-tree-container" class="ev-scroll-area" title="Ctrl/Cmd-click or Shift-click a file to select multiple, then tag them all at once."></div>
+      </div>
+
+      <div id="ev-view-search" class="ev-sidebar-view">
+        <div id="ev-search-panel">
+          <div class="ev-search-panel-row">
+            <select id="ev-search-mode">
+              <option value="decoded">Decoded search</option>
+              <option value="raw">Raw search</option>
+            </select>
+            <button id="ev-btn-search-help" class="ev-mini-btn" title="Search syntax reference">?</button>
+          </div>
+          <div class="ev-search-panel-row">
+            <input id="ev-search-input" type="text" placeholder='e.g. from:paypal "verify your account" attachments:>3'>
+          </div>
+          <div class="ev-search-panel-row">
+            <button id="ev-btn-search" class="ev-btn ev-btn-primary">Search</button>
+            <button id="ev-btn-search-cancel" class="ev-btn" style="display:none">Stop</button>
+          </div>
+          <div class="ev-search-panel-row" id="ev-search-options-row">
+            <button type="button" id="ev-search-case" class="ev-search-toggle-btn" title="Match Case">Aa</button>
+            <button type="button" id="ev-search-regex" class="ev-search-toggle-btn" title="Use Regular Expression">.*</button>
+            <span id="ev-search-options-hint" class="ev-muted-small"></span>
+          </div>
+          <div class="ev-search-panel-row">
+            <button id="ev-btn-export-iocs" class="ev-mini-btn" title="Export sender domains, URL/link domains, and attachment extensions across every currently-indexed email in this folder as one CSV — for a blocklist or incident report.">⬇ Export IOCs (CSV)</button>
+          </div>
+        </div>
+        <div id="ev-search-help" class="ev-rule-help" style="display:none"></div>
+        <div id="ev-search-status-row">
+          <span id="ev-search-status" class="ev-muted-small"></span>
+          <button id="ev-btn-clear-search" class="ev-mini-btn" title="Clear search results" style="display:none">✕ Clear</button>
+        </div>
+        <div id="ev-search-results" class="ev-scroll-area"></div>
+      </div>
+
+      <div id="ev-view-tags" class="ev-sidebar-view">
+        <div id="ev-tags-toolbar">
+          <button id="ev-btn-export-tags" class="ev-btn" title="Export all tags/notes to a JSON file">Export</button>
+          <button id="ev-btn-import-tags" class="ev-btn" title="Import tags/notes from a JSON file">Import</button>
+          <button id="ev-btn-save-tags-sidecar" class="ev-btn" title="Only available when this folder was opened via &quot;Open Folder&quot; in Chrome/Edge, with write access granted.">Save to folder</button>
+        </div>
+        <div id="ev-tags-report-toolbar">
+          <button id="ev-btn-export-report" class="ev-btn" title="Generate a shareable Markdown report of every tagged email in this folder, grouped by tag">📄 Case Report (Markdown)</button>
+        </div>
+        <div class="ev-muted-small">Filter the tree by tag:</div>
+        <div id="ev-tag-filter-list"></div>
+      </div>
+
+      <div id="ev-view-rules" class="ev-sidebar-view">
+        <div id="ev-rules-toolbar">
+          <button id="ev-btn-new-rule" class="ev-btn ev-btn-primary">+ New Rule</button>
+          <button id="ev-btn-run-all-rules" class="ev-btn">Run all</button>
+          <button id="ev-btn-stop-rules" class="ev-btn" style="display:none">Stop</button>
+        </div>
+        <div id="ev-rules-io-toolbar">
+          <button id="ev-btn-export-rules" class="ev-btn" title="Export every rule definition (not match data) to a JSON file, to back up or move to another browser/machine">Export</button>
+          <button id="ev-btn-import-rules" class="ev-btn" title="Import rules from a JSON file exported from this app. Rules whose tag already matches an existing rule are skipped, not overwritten.">Import</button>
+          <input id="ev-import-rules-input" type="file" accept="application/json" style="display:none">
+        </div>
+        <div id="ev-rules-status" class="ev-muted-small"></div>
+        <div id="ev-rules-list" class="ev-scroll-area"></div>
+      </div>
+    </div>
+
+    <div id="ev-splitter"></div>
+
+    <div id="ev-right-pane">
+      <div id="ev-tab-strip"></div>
+      <div id="ev-path-bar"></div>
+      <div id="ev-subtab-nav"></div>
+      <div id="ev-loading" style="display:none"></div>
+      <div id="ev-content" class="ev-scroll-area"></div>
+      <div id="ev-view-settings" class="ev-scroll-area">
+        <h2>Settings</h2>
+
+        <div class="ev-settings-section-title">Trusted domains</div>
+        <p class="ev-muted-small">Used by the sender-spoofing rule templates (display-name/brand mismatch, lookalike-domain check). Add your own organization's domain(s) so impersonation of your own company is caught too, not just public brands. A domain here also covers its subdomains (adding <code>mycompany.com</code> trusts <code>mail.mycompany.com</code> too). For more control, add a regex instead — one per line, written as <code>/pattern/flags</code>, e.g. <code>/\.corp\.mycompany\.com$/</code>.</p>
+        <div id="ev-trusted-domains-list"></div>
+        <textarea id="ev-trusted-domain-input" rows="3" placeholder="mycompany.com, mycompany.net&#10;/\.corp\.mycompany\.com$/"></textarea>
+        <div class="ev-settings-row">
+          <button id="ev-btn-add-trusted-domain" class="ev-mini-btn">+ Add</button>
+          <button id="ev-btn-reset-trusted-domains" class="ev-mini-btn">Reset to defaults</button>
+        </div>
+
+        <div class="ev-settings-section-title">Domain categories</div>
+        <p class="ev-muted-small">"What type of domain is this?" — checked against the sender/reply-to/return-path domains, every URL domain in the body, and domain-like text in headers and attachment filenames. Ships with a small starter set; add your own keywords to any category, or create new ones — everything here stays in this browser, never in the app's own source. A keyword starting with <code>.</code> matches the domain's ending (a TLD/suffix, e.g. <code>.xyz</code>); anything else matches as a plain substring anywhere in the domain.</p>
+        <div id="ev-domain-categories-list"></div>
+        <div class="ev-settings-row">
+          <button id="ev-btn-add-domain-category" class="ev-mini-btn">+ New category</button>
+          <button id="ev-btn-reset-domain-categories" class="ev-mini-btn">Reset to defaults</button>
+        </div>
+      </div>
+      <div id="ev-empty-state">
+        <div>
+          <h2>Mantiz-EML-Analyzer</h2>
+          <p>Open a folder of <code>.eml</code> files to get started.</p>
+          <p class="ev-muted">Everything runs locally in this browser tab — nothing is uploaded anywhere.</p>
+          <p class="ev-muted" id="ev-author-credit">Author: Kalpesh Mantri — contact <a href="mailto:kmantri.code@gmail.com" style="color: var(--accent);">kmantri.code@gmail.com</a> for updates, or report bugs via a GitHub issue.</p>
+          <p class="ev-muted" id="ev-version-marker" style="font-size:11px;"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="ev-rule-modal-overlay" class="ev-modal-overlay" style="display:none">
+    <div id="ev-rule-modal" class="ev-modal" role="dialog" aria-label="Rule editor">
+      <h3 id="ev-rule-modal-title">New Rule</h3>
+
+      <label class="ev-form-label">Name</label>
+      <input id="ev-rule-name" type="text" class="ev-form-input" placeholder="e.g. Sender / Reply-To Domain Mismatch">
+
+      <label class="ev-form-label">Tag applied to matching emails</label>
+      <input id="ev-rule-tag" type="text" class="ev-form-input" placeholder="auto-generated from name">
+
+      <label class="ev-form-label">
+        Rule expression (JavaScript, must evaluate to true/false)
+        <button id="ev-rule-help-toggle" type="button" class="ev-mini-btn">fields &amp; helpers reference</button>
+      </label>
+      <textarea id="ev-rule-expression" class="ev-form-textarea" rows="4" spellcheck="false"
+        placeholder="f.from &amp;&amp; f.replyTo &amp;&amp; f.from.domain !== f.replyTo.domain"></textarea>
+
+      <div id="ev-rule-help" class="ev-rule-help" style="display:none"></div>
+
+      <div id="ev-rule-templates-row">
+        <span class="ev-muted-small">Start from a template:</span>
+        <select id="ev-rule-template-select">
+          <option value="">— choose —</option>
+        </select>
+      </div>
+
+      <div class="ev-form-row">
+        <label class="ev-inline-check"><input type="checkbox" id="ev-rule-enabled" checked> Enabled</label>
+        <button id="ev-btn-test-rule" class="ev-btn">Test against loaded emails</button>
+      </div>
+      <div id="ev-rule-test-result" class="ev-muted-small"></div>
+      <div id="ev-rule-error" class="ev-error-inline" style="display:none"></div>
+
+      <div class="ev-modal-actions">
+        <button id="ev-btn-cancel-rule" class="ev-btn">Cancel</button>
+        <button id="ev-btn-save-rule" class="ev-btn ev-btn-primary">Save Rule</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ev-statusbar">
+    <span id="ev-status-files"></span>
+    <span id="ev-status-index"></span>
+    <div id="ev-status-progress" style="display:none"><div id="ev-status-progress-bar"></div></div>
+    <button id="ev-btn-stop-indexing" class="ev-statusbar-stop-btn" style="display:none">Stop</button>
+    <span id="ev-status-selected"></span>
+    <span id="ev-status-mode"></span>
+  </div>
+
+</div>
+
+<script src="vendor/dompurify.min.js"></script>
+<script src="js/ui/icons.js"></script>
+<script src="js/core/db.js"></script>
+<script src="js/parsing/emlParser.js"></script>
+<script src="js/parsing/icsParser.js"></script>
+<script src="js/parsing/urlExtract.js"></script>
+<script src="js/indexing/indexLogic.js"></script>
+<script src="js/parsing/sanitize.js"></script>
+<script src="js/core/tags.js"></script>
+<script src="js/core/settings.js"></script>
+<script src="js/core/whois.js"></script>
+<script src="js/rules/rulesStore.js"></script>
+<script src="js/rules/ruleTemplates.js"></script>
+<script src="js/core/session.js"></script>
+<script src="js/ui/fileTree.js"></script>
+<script src="js/ui/virtualList.js"></script>
+<script src="js/ui/tabs.js"></script>
+<script src="js/ui/render.js"></script>
+<script src="js/indexing/workerClient.js"></script>
+<script src="js/indexing/searchIndex.js"></script>
+<script src="js/indexing/rawSearch.js"></script>
+<script src="js/rules/rulesEngine.js"></script>
+<script src="js/ui/app.js"></script>
+</body>
+</html>

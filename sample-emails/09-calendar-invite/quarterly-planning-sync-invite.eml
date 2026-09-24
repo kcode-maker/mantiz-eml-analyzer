@@ -1,0 +1,24 @@
+From: "Jane Doe" <jane.doe@example-corp.com>
+To: team@example-corp.com
+Subject: Invite: Quarterly Planning Sync
+Date: Wed, 24 Jan 2024 09:00:00 +0000
+Message-ID: <invite-quarterly-sync@example-corp.com>
+Authentication-Results: mx.example-corp.com; spf=pass smtp.mailfrom=example-corp.com; dkim=pass; dmarc=pass
+Content-Type: text/calendar; method=REQUEST; charset=UTF-8
+
+BEGIN:VCALENDAR
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:quarterly-sync-2024q1@example-corp.com
+SUMMARY:Quarterly Planning Sync
+LOCATION:Conference Room 4B
+DESCRIPTION:Agenda: budget review\, roadmap check-in\, and open questions.
+DTSTART:20240215T140000Z
+DTEND:20240215T150000Z
+ORGANIZER;CN=Jane Doe:mailto:jane.doe@example-corp.com
+ATTENDEE;CN=Bob Smith:mailto:bob.smith@example-corp.com
+ATTENDEE;CN=Carol Lee:mailto:carol.lee@example-corp.com
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR

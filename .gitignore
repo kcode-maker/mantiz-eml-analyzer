@@ -1,0 +1,27 @@
+# Local engineering/handoff notes — kept out of the public repo on purpose.
+CLAUDE.md
+
+# Python virtual environments
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# This project's own runtime artifacts
+*.log
+.server.pid
+/downloads/
+
+# Generated double-click desktop launchers (scripts/serve.py --make-launchers) --
+# bake in this machine's own absolute path, so they'd be wrong for anyone else's clone.
+/launchers/
+
+# Not used by this project, but harmless to exclude if ever introduced
+node_modules/

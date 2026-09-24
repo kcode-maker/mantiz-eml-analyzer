@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    # Needs Apple's JavaScriptCore ('jsc'), which only ships with macOS —
+    # matches how every test in this project has been run and verified
+    # locally. No Node/npm anywhere: this project has zero build-time
+    # dependencies and the test suite deliberately doesn't introduce one.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test suite (syntax check + tests/*.test.js)
+        run: bash tests/run-all.sh

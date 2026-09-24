@@ -1,0 +1,20 @@
+From: "Jane Doe" <jane.doe@example-corp.com>
+To: team@example-corp.com
+Subject: Weekly status report - week 12
+Date: Mon, 15 Jan 2024 09:00:00 +0000
+Message-ID: <report-week12@example-corp.com>
+Authentication-Results: mx.example-corp.com; spf=pass smtp.mailfrom=example-corp.com; dkim=pass; dmarc=pass
+Content-Type: text/plain; charset=utf-8
+
+Hi team,
+
+Here's the summary for week 12:
+
+- Shipped the new onboarding flow
+- Fixed 4 bugs reported by support
+- Planning session scheduled for Thursday at 2pm
+
+Let me know if you have questions.
+
+Thanks,
+Jane

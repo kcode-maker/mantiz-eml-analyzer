@@ -1,0 +1,27 @@
+Received: from spoofed-relay.badnet.example (unknown [198.51.100.77])
+	by mx.example.org with ESMTP id hop2; Fri, 16 Feb 2024 03:22:10 -0500
+Received: from mail-out.suspicious-sender.example (mail-out.suspicious-sender.example [192.0.2.55])
+	by spoofed-relay.badnet.example with SMTP id hop1; Fri, 16 Feb 2024 03:22:05 -0500
+Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=security@paypa1-verify.example; dkim=fail (bad signature) header.d=paypa1-verify.example; dmarc=fail (p=REJECT sp=REJECT) header.from=paypa1-verify.example
+From: "PayPal Security" <security@paypa1-verify.example>
+To: bob@example.org
+Subject: Urgent: Verify your account now
+Date: Fri, 16 Feb 2024 03:22:00 -0500
+Message-ID: <fixture-auth-0005@paypa1-verify.example>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="ALT-BOUNDARY-1"
+
+--ALT-BOUNDARY-1
+Content-Type: text/plain; charset=UTF-8
+
+Your account has been limited. Verify now: http://paypal.com.secure-verify.example/login
+
+--ALT-BOUNDARY-1
+Content-Type: text/html; charset=UTF-8
+
+<html><body>
+<p>Your account has been limited.</p>
+<p><a href="http://paypal.com.secure-verify.example/login">https://www.paypal.com/signin</a></p>
+</body></html>
+
+--ALT-BOUNDARY-1--

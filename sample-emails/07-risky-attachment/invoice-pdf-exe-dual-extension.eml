@@ -1,0 +1,23 @@
+From: "Accounts Receivable" <ar@supplier-invoices.net>
+To: accounts-payable@example-corp.com
+Subject: Overdue invoice - please review attached
+Date: Sun, 21 Jan 2024 10:20:00 +0000
+Message-ID: <overdue-inv-77@supplier-invoices.net>
+Content-Type: multipart/mixed; boundary="BOUNDARY123"
+
+--BOUNDARY123
+Content-Type: text/plain; charset=utf-8
+
+Please see the attached overdue invoice and remit payment as soon as
+possible.
+
+--BOUNDARY123
+Content-Type: application/octet-stream; name="invoice.pdf.exe"
+Content-Disposition: attachment; filename="invoice.pdf.exe"
+Content-Transfer-Encoding: base64
+
+VGhpcyBpcyBhIGhhcm1sZXNzIHBsYWNlaG9sZGVyIGZpbGUgLSBub3QgYSByZWFsIGV4ZWN1dGFi
+bGUuIEl0IGV4aXN0cyBvbmx5IHRvIGRlbW9uc3RyYXRlIHRoZSBkdWFsLWV4dGVuc2lvbiBhbmQg
+cmlza3ktYXR0YWNobWVudCBkZXRlY3Rpb24gcnVsZXMu
+
+--BOUNDARY123--
