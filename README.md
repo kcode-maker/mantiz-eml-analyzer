@@ -5,6 +5,17 @@
 ![Runs on](https://img.shields.io/badge/runs%20on-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![Requires](https://img.shields.io/badge/requires-Python%203-informational)
 
+## 🚀 [Try it now, right in your browser](https://kcode-maker.github.io/mantiz-eml-analyzer/)
+
+Nothing to install, no clone, no server — click the link, then **Open Folder**
+and point it at any folder of `.eml` files. Hosted as a static site on GitHub
+Pages, served over HTTPS, which actually unlocks the *full* experience with
+zero setup (background Workers for parallel parsing/search, and attachment
+SHA-256 hashing — see [Install](#install) below for why that matters).
+Opening this link never uploads your `.eml` files anywhere: the page is just
+the app's code; the folder you pick is still read straight from your own
+disk, in your own browser, same as running it locally.
+
 A local, IDE-style tool for bulk-reviewing `.eml` files — built for security
 analysts triaging batches of suspicious/phishing email samples, but useful
 for anyone who needs to browse, read, search, tag and rule-match a folder
