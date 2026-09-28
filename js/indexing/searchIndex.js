@@ -11,7 +11,7 @@
  *
  * Query grammar: bare words (AND), "exact phrase" (verified against the
  * stored subject/from/to text; body/meta phrase matches are "all these
- * words present", not strict adjacency — see README for why), and
+ * words present", not strict adjacency — see HELP.md's Search section for why), and
  * field:value / field:"value" for field in
  * {subject,from,to,url,attachment,tag,meta,header(alias of meta)}.
  *

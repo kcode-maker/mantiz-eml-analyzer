@@ -1,8 +1,9 @@
 # Mantiz-EML-Analyzer — Help & User Guide
 
-A complete, task-by-task guide to every feature. For install instructions
-and the high-level feature overview, see [README.md](README.md). For what
-changed in each version, see [CHANGELOG.md](CHANGELOG.md).
+A complete, task-by-task guide to every feature. For a quick start and a
+high-level overview, see [README.md](README.md); for internals and design
+rationale, see [ARCHITECTURE.md](ARCHITECTURE.md). For what changed in
+each version, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Contents
 
@@ -21,15 +22,33 @@ changed in each version, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started
 
-1. Start the app: `python3 scripts/serve.py` (or double-click
-   `scripts/run.sh` / `scripts/run.bat`) from a terminal in this folder,
-   then open the URL it prints — or just double-click `index.html` for a
-   quick, single-threaded fallback with no server at all. See
-   [README's Quick start](README.md#quick-start-one-command-every-os) for
-   the exact commands. Want a launcher icon you can keep on your actual
-   Desktop instead? Run `python3 scripts/serve.py --make-launchers` once,
-   then copy the generated file for your OS out of `launchers/` — see
-   README's Quick start for details.
+1. Start the app. The recommended way, any OS:
+   ```bash
+   python3 scripts/serve.py
+   ```
+   This opens the app in your browser and keeps running in that terminal
+   window until you close it or press `Ctrl+C`. It always uses port 8765
+   (pass a different one, e.g. `python3 scripts/serve.py 9000`, if that's
+   ever taken) — to change the default permanently instead, create a
+   `.mantiz-config.json` file next to `index.html`: `{ "port": 9000 }`
+   (gitignored — your own local preference).
+
+   A couple of alternatives, if a typed command isn't what you want:
+   - **Double-click instead of typing**: `scripts/run.sh` (macOS/Linux) or
+     `scripts/run.bat` (Windows) call the same script for you — but must
+     stay inside this cloned folder to work.
+   - **A launcher icon for your actual Desktop**: run
+     `python3 scripts/serve.py --make-launchers` once. This generates one
+     file per OS into a local `launchers/` folder (not committed to git),
+     each with this exact copy's path baked in. Copy the one for your OS
+     to your Desktop and double-click it any time — closing its window
+     (or `Ctrl+C`) stops the server immediately, same as the plain script.
+     Re-run `--make-launchers` if you move the app folder itself.
+   - **No server at all**: just double-click `index.html`. Everything
+     still works — folder picking, parsing, search, tagging, rules — just
+     single-threaded and without attachment hashing (see
+     [ARCHITECTURE.md](ARCHITECTURE.md#known-limitations)). Fine for
+     casual use or small folders.
 2. Click **Open Folder** and pick a directory of `.eml` files (any depth of
    subfolders), or **Open Files** for a handful of loose files, or drag a
    folder onto the window. Nothing is copied or uploaded — the app reads
@@ -111,6 +130,14 @@ Each open email is a tab, and each tab has six views:
 Tips:
 - **Load remote images/content** (checkbox in Preview) turns on remote
   fetches for that one email only, when you deliberately want to see them.
+- **The Links panel flags a text/destination mismatch** — a classic
+  phishing tell is a link whose visible text says one thing ("paypal.com")
+  while its `href` points somewhere else entirely. Hover any link in the
+  rendered body for a tooltip showing its real destination without ever
+  needing to click it; the Links panel lists every link the same way. A
+  link whose only content is an image (or is otherwise empty of text)
+  shows exactly what it wraps — `[Image: <alt text>]`, `[Image]`, or
+  `(empty link text)` — instead of a vague placeholder.
 - **Scan URL** next to any link (in the Links panel or the
   Blocked-resources panel) opens VirusTotal's URL analysis for that exact
   link in a new tab — it shows the resolved redirect chain and final
@@ -355,8 +382,8 @@ Open the **Rules** sidebar tab.
   ```
   This tags every email whose `From` domain doesn't match its `Reply-To`
   domain. See [why a real expression instead of a custom
-  mini-language](README.md#why-javascript-expressions-for-rules) for the
-  reasoning, and click **fields & helpers reference** in the editor for
+  mini-language](ARCHITECTURE.md#why-javascript-expressions-for-rules) for
+  the reasoning, and click **fields & helpers reference** in the editor for
   the full list of what's available in `f` (the facts about the current
   email — including `f.nameMismatch`/`f.lookalikeDomain`/
   `f.punycodeSender` for sender-spoofing and `f.urgencyScore`/
@@ -517,7 +544,8 @@ appear again on later runs — tick that box first if you want it back.
 - **"Attachments: sha256 unavailable (serve over http(s) to enable)"** —
   you're likely running via a plain `file://` page. Use
   `scripts/serve.py` (or `run.sh`/`run.bat`) instead; see
-  [README's Install section](README.md#install) for why.
+  [ARCHITECTURE.md's Known limitations](ARCHITECTURE.md#known-limitations)
+  for why.
 - **Search/indexing seems slow** — decoded search indexing is bound by real
   disk-read + MIME-decode work, parallelized across a worker pool; it's
   incremental and searchable while still running (watch the progress bar
@@ -531,7 +559,7 @@ appear again on later runs — tick that box first if you want it back.
   semantics; an unparseable query clause intentionally matches nothing
   rather than everything, with a warning shown in the status line.
 - **Something looks like a real bug** — see
-  [README's Security notes](README.md#security-notes) for what "shouldn't
-  be possible" in this app, and please report it: contact
+  [ARCHITECTURE.md's Security model](ARCHITECTURE.md#security-model) for
+  what "shouldn't be possible" in this app, and please report it: contact
   [kmantri.code@gmail.com](mailto:kmantri.code@gmail.com) or open a GitHub
   issue on this project's repository.

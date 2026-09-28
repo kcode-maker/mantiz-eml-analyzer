@@ -1,7 +1,7 @@
 /**
  * whois.js — an explicit, per-click domain-age (WHOIS/RDAP) lookup. This is
  * the app's second deliberate exception to "nothing is ever fetched by this
- * app itself" (see README's Security notes) — the first being the
+ * app itself" (see ARCHITECTURE.md's Security model) — the first being the
  * VirusTotal "Scan URL" button, which only ever opens a new tab and never
  * makes its own network request. This one genuinely does: it calls the free
  * public RDAP service (no API key, no config) with only the domain string,

@@ -651,7 +651,7 @@
   /**
    * Builds the read-only "facts" object a rule expression is evaluated
    * against (the first argument, `f`). Kept intentionally flat and simple —
-   * see README's rules section for the full documented field list.
+   * see HELP.md's Rules section for the full documented field list.
    * @param {object} parsed
    * @param {{trustedDomains?: string[]}} [opts]
    */

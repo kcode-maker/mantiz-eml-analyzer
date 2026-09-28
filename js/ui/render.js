@@ -108,7 +108,7 @@
    * the attachment VirusTotal button's safety contract: only the URL string
    * is sent to a trusted third-party scanner, never touched directly by the
    * analyst's own browser/network. This is deliberately NOT a "fetch this
-   * URL" button — see README's security notes for why resolving redirects
+   * URL" button — see ARCHITECTURE.md's Security model for why resolving redirects
    * client-side would be unsafe (tips off the sender that the link was
    * opened) and unreliable (CORS blocks reading most cross-origin redirect
    * chains anyway).
@@ -125,7 +125,7 @@
   /**
    * A button that looks up a domain's registration age via the free public RDAP service — the
    * app's one other deliberate exception (besides Scan URL) to "nothing is ever fetched by this app
-   * itself"; see js/core/whois.js's header comment and README's Security notes. Explicit per-click,
+   * itself"; see js/core/whois.js's header comment and ARCHITECTURE.md's Security model. Explicit per-click,
    * never automatic/bulk. Always shows one of found/not-found/error inline next to the button —
    * never a silent blank — and disables itself while the lookup is in flight so a slow/hung request
    * can't be fired twice.
@@ -515,7 +515,7 @@
     // allow-same-origin (WITHOUT allow-scripts) so blob: URLs for inline cid: images —
     // which are origin-scoped — resolve inside the iframe. No script execution is ever
     // permitted either way, since allow-scripts is never set; DOMPurify + this sandbox
-    // together mean this grant carries no meaningful risk (see README security notes).
+    // together mean this grant carries no meaningful risk (see ARCHITECTURE.md's Security model).
     iframe.setAttribute('sandbox', 'allow-same-origin');
     iframe.setAttribute('referrerpolicy', 'no-referrer');
     var sanitized;
