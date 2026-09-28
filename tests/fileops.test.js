@@ -237,6 +237,35 @@ step(function (ws) {
   assert(names.indexOf(EV.TAGS_SIDECAR_NAME) === -1, 'the tags sidecar never appears as a tree/index entry (' + JSON.stringify(names) + ')');
 });
 
+// ---- Explorer "Refresh" (app.js's refreshExplorerFromDisk) relies entirely on calling
+// EV.resumeFromDirHandle a second time on the SAME dirHandle to pick up on-disk changes made by
+// something other than this app (there's no live filesystem-watch API in browsers) -- verify a
+// second walk of the same mock root actually reflects files added/removed between the two calls,
+// not a cached/stale result from the first walk. A fresh, dedicated mock root is used here (rather
+// than the shared `root` above, which every earlier test in this file has already been mutating
+// via move/copy/rename) so this assertion's "before" state is self-contained and known exactly. ----
+var refreshRoot = new MockDirHandle('refresh-test-root');
+refreshRoot._children['a.eml'] = new MockFileHandle('a.eml', 'AAA');
+refreshRoot._children['b.eml'] = new MockFileHandle('b.eml', 'BBB');
+var refreshSub = new MockDirHandle('sub');
+refreshSub._children['c.eml'] = new MockFileHandle('c.eml', 'CCC');
+refreshRoot._children['sub'] = refreshSub;
+
+step(function () { return EV.resumeFromDirHandle(refreshRoot); });
+step(function (ws) {
+  var names = EV.flattenFileNodes(ws.root).map(function (n) { return n.entry.path; }).sort();
+  assert(JSON.stringify(names) === JSON.stringify(['a.eml', 'b.eml', 'sub/c.eml']), 'baseline walk before simulating any on-disk change (' + JSON.stringify(names) + ')');
+  refreshRoot._children['new-arrival.eml'] = new MockFileHandle('new-arrival.eml', 'NEW');
+  delete refreshRoot._children['b.eml'];
+  return EV.resumeFromDirHandle(refreshRoot);
+});
+step(function (ws) {
+  var names = EV.flattenFileNodes(ws.root).map(function (n) { return n.entry.path; }).sort();
+  assert(names.indexOf('new-arrival.eml') !== -1, 'refreshing picks up a file added to disk after the first walk (' + JSON.stringify(names) + ')');
+  assert(names.indexOf('b.eml') === -1, 'refreshing no longer lists a file removed from disk after the first walk (' + JSON.stringify(names) + ')');
+  assert(names.indexOf('a.eml') !== -1 && names.indexOf('sub/c.eml') !== -1, 'files untouched on disk are still listed after refreshing (' + JSON.stringify(names) + ')');
+});
+
 step(function () {
   print('---');
   print('PASS: ' + pass + '  FAIL: ' + fail);

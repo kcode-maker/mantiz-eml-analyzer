@@ -18,6 +18,14 @@ fail=0
 
 echo "== Syntax-checking js/**/*.js =="
 for f in $(find js -name '*.js' | sort); do
+  # js/core/ocrBridge.js is the one deliberate ES module in this app (uses import/export) --
+  # jsc's `-f` parses every other file as a classic script, so it always reports a false
+  # "SyntaxError" here regardless of whether the module itself is actually well-formed. Running it
+  # with `-m` instead would need a real browser (Worker/WebAssembly/fetch) to resolve its import,
+  # which jsc doesn't have -- same "can't run under jsc" carve-out this project already applies to
+  # WHOIS's real fetch() and the real OCR engine call. Skip it here; it's covered by the
+  # live-browser OCR test instead.
+  if [ "$f" = "js/core/ocrBridge.js" ]; then continue; fi
   out=$("$JSC" -f "$f" 2>&1)
   if echo "$out" | grep -qi "SyntaxError"; then
     echo "SYNTAX ERROR in $f:"

@@ -39,10 +39,32 @@ changed in each version, see [CHANGELOG.md](CHANGELOG.md).
 
 ## The Explorer (file tree)
 
+- **What the dots next to a filename mean** — there are two different
+  kinds, and they're deliberately different shapes so they're never
+  confused:
+  - A small **green ring** right after the file icon (before the
+    filename) means that file is **currently open in a tab** — any open
+    tab, not just the one you're actively looking at. Hover it: "Open in a
+    tab right now".
+  - Small **filled, colored dots** after the filename are that email's
+    **tags** — one dot per tag (up to 5 shown), each colored by hashing
+    the tag's name (the same tag always gets the same color, but two
+    different tags can occasionally land on similar-looking colors).
+    Hover any one of them: "Tag: `<name>`".
 - **Browsing**: click a folder to expand/collapse it (or use **⊟**/**⊞** in
   the toolbar for Collapse All / Expand All). Click a `.eml` file to open it
   in a new tab. The **Name (A→Z / Z→A)** dropdown sorts the tree (folders
   always come first).
+- **Refresh** (**⟳**, first icon in the toolbar): this app has no way to
+  automatically notice files added, removed, or renamed by something else
+  (Finder, another tool, a sync client) — browsers don't offer a live
+  "watch this folder" API. Click Refresh any time you know the folder
+  changed outside the app to re-read it from disk. Only works for a
+  folder opened via **Open Folder** in Chrome/Edge (the same requirement
+  Delete/Move/Copy have); for any other way of opening files, you'll see
+  a message pointing you back to **Open Folder**. Your open tabs stay
+  open — only a tab for a file that no longer exists gets closed
+  automatically.
 - **Filtering by name**: type into the "Filter files by name…" box to hide
   everything that doesn't match.
 - **File-filter mode**: the dropdown next to the sort control has two
@@ -83,7 +105,7 @@ Each open email is a tab, and each tab has six views:
 | **Headers** | Every header in original order, with a Copy button on each, and `Authentication-Results`/`Received` called out separately. |
 | **text-body** | The visible plain text of the email — the real `text/plain` part if there is one, or text extracted from the HTML part (clearly labeled as a fallback) if not. |
 | **html-body** | The raw decoded HTML source itself, unrendered, line-numbered — for spotting things a safe render hides on purpose (hidden elements, tracking pixels, obfuscated markup). |
-| **Attachments** | Every attachment: filename, MIME type, size, a cached SHA-256 hash, a **Download** button, an inline preview for images/plain text, and a **VirusTotal** button (looks up the hash only — the file is never uploaded). |
+| **Attachments** | Every attachment: filename, MIME type, size, a cached SHA-256 hash, a **Download** button, an inline preview for images/plain text, and a **VirusTotal** button (looks up the hash only — the file is never uploaded). The first meaningful image (inline or attached) also gets an **🔎 Extract text (OCR)** button — see below. |
 | **Raw** | The exact original bytes of the `.eml` file, line-numbered, with copy/re-download. |
 
 Tips:
@@ -106,6 +128,20 @@ Tips:
   is purely a read-only summary of plain-text fields; the attachment (if
   any) is still only ever offered as a normal download in the Attachments
   tab, same as any other attachment.
+- **Extract text (OCR)**: in the Attachments tab, the first meaningful
+  image in the email (over a tiny size floor, whether inline or a regular
+  attachment) gets a **🔎 Extract text (OCR)** button. Click it to run text
+  recognition entirely in your browser — nothing is uploaded anywhere, and
+  nothing in the image is ever executed, only its pixels are read. The
+  first click each browser session is a little slower (a few seconds) while
+  the OCR engine starts up; after that, the same image (by its exact
+  content, not just its filename) reuses its cached result instantly, even
+  in a different email or a later session. The extracted text also becomes
+  searchable via `attachment.ocr:` — see Search, below — but only for
+  images you've actually clicked this button on; it's never run
+  automatically or in bulk. Treat the output as a helpful lead, not ground
+  truth: it's English-only, tuned for speed over perfect accuracy, and can
+  miss things like light-colored text on a solid dark button.
 
 ## Search
 
@@ -118,24 +154,45 @@ A small query grammar over an index built as the folder loads:
 
 - **Bare words** are ANDed together: `invoice urgent` finds emails
   containing both words somewhere.
-- **`"exact phrase"`** — quoted text. Verified exactly for subject/from/to;
-  for the body/headers it means "all these words present", not strict
-  word-adjacency.
-- **`field:value`** — restrict to one field: `from:`, `to:`, `subject:`,
-  `url:`, `attachment:` (matches filenames), `meta:` (or `header:`, matches
-  across all header values), `tag:` (exact tag name match).
+- **`"exact phrase"`** — quoted text. Verified exactly for
+  subject/from/to/cc/bcc/reply-to/return-path; for the body/headers it
+  means "all these words present", not strict word-adjacency.
+- **`field:value`** — restrict to one field, using a namespaced grammar
+  (`header.*` for anything header-related, `attachment.*` for anything
+  attachment-related): `header.subject:`, `header.from:`, `header.to:`,
+  `header.cc:`, `header.bcc:`, `header.replyto:`, `header.returnpath:`
+  (address fields match the bare address only, no display name — search
+  the full address for these), `header.messageid:` (exact match on the
+  Message-ID), `header.raw:` (matches across all header values),
+  `attachment.filename:` (matches filenames), `attachment.ext:` (exact
+  match on an attachment's extension — include the dot, e.g.
+  `attachment.ext:.exe`), `attachment.sha256:` (exact match, case-
+  insensitive, on an attachment's own SHA-256 — computed for every
+  attachment as the folder indexes, so unlike OCR below this one covers
+  the whole folder immediately; paste in a hash from a threat-intel feed
+  or a VirusTotal result to find every email carrying that exact file),
+  `attachment.ocr:` (matches text extracted from
+  image attachments — **sparse, not exhaustive**: only covers emails
+  where you've actually clicked "Extract text (OCR)" in the Attachments
+  tab, see Reading an email, above; a live "OCR coverage: N email(s)
+  OCR-indexed so far" note appears next to your results whenever a query
+  uses this field, as a reminder that a miss here doesn't mean the image
+  has no matching text), `tag:` (exact tag name match). **This replaced
+  the old flat `from:`/`to:`/`attachment:`/`attachments:`/`meta:`/`header:`
+  syntax** — those no longer parse as fields.
 - **`-exclude`** — put a `-` in front of any term or `field:value` to
-  exclude it: `-tag:reviewed`, `-attachment:invoice`.
+  exclude it: `-tag:reviewed`, `-attachment.filename:invoice`.
 - **`OR`** (all-caps only — lowercase `or` is just a word) and `(...)`
   grouping — OR binds looser than the implicit AND:
-  `(from:paypal OR from:ebay) attachments:>0` finds attachments from either
-  sender; `-(from:paypal OR from:ebay)` negates the whole group. Combines
+  `(header.from:paypal OR header.from:ebay) attachment.count:>0` finds
+  attachments from either sender; `-(header.from:paypal OR header.from:ebay)`
+  negates the whole group. Combines
   with the `Aa`/`.*` toggles above too — Match Case still verifies each
   leaf inside the group, and Use Regex (which bypasses this whole grammar)
   treats `(`/`)`/`OR` as literal pattern text, not grouping syntax.
 - **Numeric fields** — glue a comparison operator directly onto the value
   (no space):
-  - `attachments:>3`, `attachments:3` (exact), `attachments:<=1`
+  - `attachment.count:>3`, `attachment.count:3` (exact), `attachment.count:<=1`
   - `size:>5mb`, `size:<100kb` (accepts `b`/`kb`/`mb`/`gb`, case-insensitive)
   - `urls:>=10` — number of links found in the body
   - `recipients:>20` — unique To/Cc/Bcc count
@@ -143,11 +200,14 @@ A small query grammar over an index built as the folder loads:
     (or content hash, if there's no Message-ID) — `duplicates:>1` finds
     every file that's part of a repeated/bulk-sent batch; `duplicates:1`
     finds only the unique ones.
+  - `urgency:>=3` — the always-on urgency-language score
 - **Regex** — `field:/pattern/flags` runs a real regular expression instead
-  of substring matching, on `subject:`, `from:`, `to:`, or `attachment:`
+  of substring matching, on `header.subject:`, `header.from:`, `header.to:`,
+  `header.cc:`, `header.bcc:`, `header.replyto:`, `header.returnpath:`, or
+  `attachment.filename:`
   only (the fields whose full text is kept, not just search tokens):
-  `attachment:/\.(exe|scr|js)$/i`, `subject:/^re:.*invoice/i`.
-- Combine freely: `from:paypal attachments:>3 -tag:reviewed`.
+  `attachment.filename:/\.(exe|scr|js)$/i`, `header.subject:/^re:.*invoice/i`.
+- Combine freely: `header.from:paypal attachment.count:>3 -tag:reviewed`.
 - A term or value that can't be resolved — too short to search on, an
   unparseable numeric comparison, or an invalid regex — deliberately
   matches **nothing** rather than everything, with a warning explaining
@@ -160,13 +220,13 @@ A small query grammar over an index built as the folder loads:
 click to turn either on/off, no separate "case insensitive" option since
 that's just Match Case turned off):
 - **`Aa` Match Case** — verifies exact case for quoted phrases and any
-  term, but only against subject/from/to/attachment (the same fields
-  `field:/pattern/` above is limited to); body/header matches are
-  unaffected either way. A status-line note appears whenever it's on to
+  term, but only against the fields with retained raw text (the same
+  fields `field:/pattern/` above is limited to); `header.raw`/body matches
+  are unaffected either way. A status-line note appears whenever it's on to
   make that scope clear.
 - **`.*` Use Regex** — treats the *entire* search box as one regex
   pattern, ignoring `field:`/`"phrase"`/`tag:` syntax while it's on, tested
-  against subject/from/to/attachment — the same one-pattern model Raw
+  against those same raw-text fields — the same one-pattern model Raw
   search's own regex toggle uses below, so flipping between the two modes
   behaves predictably. Use Raw search instead to regex the full body. An
   invalid pattern matches nothing (with a warning), never everything.
@@ -181,13 +241,62 @@ or before the decoded index has finished building, and (unlike Decoded
 search) the way to regex or case-match the full raw body. Uses the same
 **`Aa`**/**`.*`** toggle buttons as Decoded search above.
 
+### Files to include/exclude
+
+Below the `Aa`/`.*` toggles, a collapsible **Files to include/exclude**
+section adds a VS Code-style path filter shared identically by Decoded and
+Raw search: plain substring matching against each file's relative path,
+with optional wildcards — `*` for any run of characters, `?` for exactly
+one. For example, include `invoices/*` to only search inside an `invoices`
+folder, or exclude `*.tmp` to skip scratch files. One pattern per line, or
+comma-separate several on one line. An excluded path always wins over an
+included one; leaving Include blank means "everything not excluded".
+
+### Selecting and acting on multiple search results
+
+Once you have results, a bar above the list shows a master checkbox and a
+count:
+
+- **Check the master checkbox** to select every result, or uncheck it to
+  clear the selection (it shows a dash when only some are selected).
+- **Check individual rows**, or use `Shift`-click to select a range and
+  `Ctrl`/`Cmd`-click to toggle one row — same conventions as the Explorer
+  tree's own multi-select.
+- **Right-click** a row (or the current selection) for **Copy path(s)**,
+  **Copy file name(s)** — both clipboard-only, always available regardless
+  of write access —, **Extract OCR (selected)** (see below), or the same
+  Move to folder…/Copy to folder…/Delete actions described in
+  [Delete, Move, and Copy](#delete-move-and-copy).
+
+### Bulk-extracting OCR for a batch of emails
+
+The same right-click menu (from Explorer, Search results, or a rule's/
+tag's "View matches"/"View files" list) has an **Extract OCR (selected)**
+action — it runs OCR on each selected email's first meaningful image, one
+at a time, so you don't have to open every email and click the
+per-attachment button individually. A live "N/M" count and a **Stop**
+button appear in the status bar while it runs.
+
+This is deliberately scoped to whatever you've selected — there's no
+single "OCR the entire folder" button. OCR runs through one shared engine
+instance in your browser and processes images one at a time, so an
+unscoped whole-folder run on a very large folder could take a long time;
+narrow down to the batch you actually care about first (a search, a
+rule's matches, a tag's members, or a manual multi-select), then run this
+on that. Re-running it over emails you've already OCR'd is cheap — anything
+already cached is skipped, so you can safely re-run it after adding a few
+more emails to a selection without redoing the whole batch.
+
 ### Export IOCs (CSV)
 
-Below the search box, **⬇ Export IOCs (CSV)** downloads one file covering
-every currently-indexed email: every sender domain, every URL/link domain,
-and every attachment extension seen, each with a count of how many emails
-referenced it — the aggregate artifact for a blocklist or incident report,
-instead of reading it off one email at a time.
+Below the search box, **⬇ Export IOCs (CSV)** downloads one file: every
+sender domain, every URL/link domain, every attachment extension, every
+financial-indicator type, and a sender-anomaly count, each with a count of
+how many emails referenced it. It automatically scopes to whatever you're
+currently looking at in this tab — an explicit selection first, then the
+current search/rule/tag results, and only if neither of those is active
+does it cover the whole indexed folder. Hover the button any time to see
+exactly which of the three it's about to use.
 
 ## Tags
 
@@ -196,6 +305,9 @@ Open the **Tags** sidebar tab.
 - **Adding a tag**: from an open email's Preview tab, click "+ add tag",
   type a name, press Enter. From the Explorer tree, multi-select several
   files first (see above) to tag them all at once.
+- **Removing a tag from one email**: click the **×** on its tag chip in
+  that email's Preview tab. To remove a tag from *every* email at once
+  instead, see **Delete tag** below.
 - **Filtering by tag**: check one or more tag names in the Tags panel to
   filter the Explorer tree down to just emails carrying those tags.
 - **Export** / **Import**: back up all tags (and notes) to a JSON file, or
@@ -214,7 +326,17 @@ Open the **Tags** sidebar tab.
   email — for handing off "here's everything I found" without retyping it.
 - **Bulk actions per tag**: click the **⋯** button next to any tag name to
   open the same Delete/Move/Copy menu described below, pre-loaded with
-  every email that currently carries that tag.
+  every email that currently carries that tag — this acts on the *files*.
+  **View files** lists them in the Search tab instead, with the same
+  select-some/select-all tools described in [Search](#search).
+- **Delete tag** (untag everywhere): removes that tag from every email
+  that carries it, in one click — the emails themselves are never touched
+  or deleted, only the tag. Since a tag isn't a separate thing you create
+  ahead of time (it exists for as long as at least one email carries it),
+  "deleting" one just means clearing it everywhere at once instead of
+  removing it from each email's Preview tab one at a time. If a still-
+  enabled rule currently applies this tag, its next run simply re-adds it
+  — disable or delete that rule too if you want the tag gone for good.
 
 Tags remember *where they came from*: a manually-typed tag and a
 rule-applied tag with the exact same name on the same email are tracked
@@ -312,6 +434,16 @@ silently failing.
 Click the gear icon at the top-right of the toolbar — it opens a full-width
 Settings page in the right pane (not a sidebar panel), with:
 
+- **IDE config**: **Max open tabs** (1–100, default 10) — past the limit,
+  the tab you viewed longest ago closes first to make room for a new one.
+  Below it, a read-only **Server port** line shows which port you're
+  currently running on. It can't be changed from here — the page only
+  loads *after* `scripts/serve.py` has already started and bound to a
+  port, so nothing running in the browser can reach back and change that.
+  To actually change the default port, create a `.mantiz-config.json` file
+  next to `index.html` (`{ "port": 9000 }`, gitignored — your own local
+  preference) and restart the server; a port typed on the command line
+  (`python3 scripts/serve.py 9000`) still overrides it for that one run.
 - **Trusted domains**: the list the sender-spoofing rule templates (brand
   impersonation, lookalike-domain) check against, pre-filled with a small
   built-in brand list. Paste in your own organization's domain(s) — one at

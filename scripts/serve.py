@@ -7,122 +7,68 @@ identically on macOS, Linux, and Windows, using nothing but the Python 3
 standard library (no pip installs, no Node).
 
 Usage:
-    python3 scripts/serve.py            # start in the background, opens your
-                                         # browser, and returns control to
-                                         # this terminal immediately
-    python3 scripts/serve.py 9000       # same, on a specific port
-    python3 scripts/serve.py --stop     # stop the background server
-    python3 scripts/serve.py --foreground [port]
-                                         # run in *this* terminal instead,
-                                         # blocking until Ctrl+C — useful if
-                                         # you want to watch the access log
-    python3 scripts/serve.py --foreground --open [port]
-                                         # same, and also opens your browser
-                                         # shortly after the server starts —
-                                         # what the double-click launchers
-                                         # below use, so nothing ever runs
-                                         # detached in the background
+    python3 scripts/serve.py            # always on port 8765 (or whatever's
+                                         # in .mantiz-config.json, see below)
+                                         # -- opens your browser, and runs
+                                         # until you close this terminal
+                                         # window or press Ctrl+C -- nothing
+                                         # to remember to stop afterward,
+                                         # nothing lingers. If the port's
+                                         # already in use, this fails with a
+                                         # clear message rather than
+                                         # silently picking another port
+    python3 scripts/serve.py 9000        # same, but on port 9000 for just
+                                         # this run (overrides the config
+                                         # file below, doesn't change it)
     python3 scripts/serve.py --make-launchers
                                          # generates one double-click launcher
                                          # per OS (macOS/Windows/Linux) into
                                          # launchers/, each with this exact
-                                         # copy's folder path baked in — copy
+                                         # copy's folder path baked in -- copy
                                          # the one for your OS to your Desktop
                                          # (or anywhere) and double-click it
-                                         # any time; closing its window stops
-                                         # the server, nothing lingers after
+                                         # any time
+
+To change the *default* port permanently (so you don't have to pass it
+every time), create a `.mantiz-config.json` file next to this repo's
+`index.html`:
+
+    { "port": 9000 }
+
+This file is machine-specific (gitignored, like `launchers/`) -- it's your
+own local preference, not something the repo ships with. The app's own
+Settings page (IDE config) shows which port you're currently running on
+and reminds you which file to edit to change it, but can't edit this file
+itself -- by the time that page loads in your browser, this script has
+already started and bound to a port, so nothing running in the browser can
+reach back and change that.
 
 (Windows: same commands, just `python` instead of `python3`.)
 """
 import http.server
 import json
 import os
-import shlex
-import signal
-import socket
-import subprocess
 import sys
 import threading
-import time
 import webbrowser
 
 DEFAULT_PORT = 8765
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PID_FILE = os.path.join(PROJECT_ROOT, ".server.pid")
-LOG_FILE = os.path.join(PROJECT_ROOT, ".server.log")
+CONFIG_FILE = os.path.join(PROJECT_ROOT, ".mantiz-config.json")
 APP_NAME = "Mantiz-EML-Analyzer"
 
 
-def find_free_port(start_port):
-    port = start_port
-    while port < start_port + 200:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            try:
-                probe.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                port += 1
-    raise RuntimeError("Could not find a free port near {}".format(start_port))
-
-
-def port_is_open(port, timeout=0.3):
+def configured_port():
+    """Reads a preferred default port from .mantiz-config.json, if present and valid.
+    Returns None (falling back to DEFAULT_PORT) on any error -- a broken/missing
+    config file should never stop the app from starting."""
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-def read_pidfile():
-    if not os.path.exists(PID_FILE):
+        with open(CONFIG_FILE) as f:
+            data = json.load(f)
+        port = int(data.get("port"))
+        return port if 1 <= port <= 65535 else None
+    except (OSError, ValueError, TypeError):
         return None
-    try:
-        with open(PID_FILE) as f:
-            return json.load(f)
-    except (ValueError, OSError):
-        return None
-
-
-def is_process_alive(pid):
-    if not pid:
-        return False
-    if os.name == "nt":
-        try:
-            import ctypes
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return True
-            return False
-        except Exception:
-            return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def stop_server():
-    info = read_pidfile()
-    pid = info.get("pid") if info else None
-    if not pid or not is_process_alive(pid):
-        print("{} is not running.".format(APP_NAME))
-        if os.path.exists(PID_FILE):
-            os.remove(PID_FILE)
-        return
-    print("Stopping {} (PID {})...".format(APP_NAME, pid))
-    try:
-        if os.name == "nt":
-            subprocess.call(["taskkill", "/PID", str(pid), "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            os.kill(pid, signal.SIGTERM)
-    except OSError:
-        pass
-    if os.path.exists(PID_FILE):
-        os.remove(PID_FILE)
-    print("Stopped.")
 
 
 class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
@@ -139,68 +85,44 @@ class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
 
-def run_foreground(requested_port, open_browser=False):
-    port = find_free_port(requested_port)
+def run(requested_port):
+    """
+    Runs the server in THIS process, in the foreground, and opens the
+    browser shortly after. This window IS the running server -- closing it
+    (or Ctrl+C) stops the server immediately, and nothing keeps running in
+    the background afterward. Deliberately the only mode this script has:
+    a background/detached mode needs a separate stop command to remember,
+    which defeats the "keep it simple" point of a one-click local server.
+
+    Always binds to exactly `requested_port` (8765 by default) -- never
+    silently drifts to a different port if that one's taken, so the app's
+    URL is always predictable. If the port really is in use, this fails
+    with a clear message instead.
+    """
     os.chdir(PROJECT_ROOT)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), NoCacheHandler)
+    port = requested_port
+    try:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), NoCacheHandler)
+    except OSError as e:
+        print("Could not start on port {}: {}".format(port, e))
+        print("Something else is already using that port. Close it, or run:")
+        print("  {} scripts/serve.py <a-different-port>".format("python" if os.name == "nt" else "python3"))
+        sys.exit(1)
     url = "http://127.0.0.1:{}/index.html".format(port)
     print("=" * 60)
     print(" {} running at: {}".format(APP_NAME, url))
     print(" Serving folder: {}".format(PROJECT_ROOT))
-    if open_browser:
-        print(" This window IS the running server.")
-        print(" Close this window (or press Ctrl+C) to stop it --")
-        print(" nothing keeps running in the background afterward.")
-    else:
-        print(" Press Ctrl+C to stop.")
+    print(" This window IS the running server.")
+    print(" Close this window (or press Ctrl+C) to stop it --")
+    print(" nothing keeps running in the background afterward.")
     print("=" * 60)
-    if open_browser:
-        # A short delay so the browser doesn't race the socket's first accept().
-        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    # A short delay so the browser doesn't race the socket's first accept().
+    threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping {} server...".format(APP_NAME))
         server.shutdown()
-
-
-def start_background(requested_port):
-    existing = read_pidfile()
-    if existing and is_process_alive(existing.get("pid")) and port_is_open(existing.get("port", -1)):
-        url = "http://127.0.0.1:{}/index.html".format(existing["port"])
-        print("{} is already running at {} (PID {}).".format(APP_NAME, url, existing["pid"]))
-        webbrowser.open(url)
-        return
-
-    port = find_free_port(requested_port)
-    log_handle = open(LOG_FILE, "a")
-
-    popen_kwargs = dict(cwd=PROJECT_ROOT, stdout=log_handle, stderr=log_handle, stdin=subprocess.DEVNULL)
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-    else:
-        popen_kwargs["start_new_session"] = True  # detach from this terminal's process group
-
-    proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--foreground", str(port)], **popen_kwargs)
-
-    with open(PID_FILE, "w") as f:
-        json.dump({"pid": proc.pid, "port": port}, f)
-
-    url = "http://127.0.0.1:{}/index.html".format(port)
-    for _ in range(50):  # wait up to ~5s for it to actually be listening before opening the browser
-        if port_is_open(port):
-            break
-        time.sleep(0.1)
-
-    stop_cmd = "{} scripts/serve.py --stop".format("python" if os.name == "nt" else "python3")
-    print("=" * 60)
-    print(" {} started in the background.".format(APP_NAME))
-    print(" URL:      {}".format(url))
-    print(" PID:      {}".format(proc.pid))
-    print(" Log file: {}".format(LOG_FILE))
-    print(" Stop it with: {}".format(stop_cmd))
-    print("=" * 60)
-    webbrowser.open(url)
 
 
 MAC_LAUNCHER_TEMPLATE = """#!/usr/bin/env bash
@@ -221,7 +143,7 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo
   exit 1
 fi
-exec "$PYTHON_BIN" scripts/serve.py --foreground --open
+exec "$PYTHON_BIN" scripts/serve.py
 """
 
 WINDOWS_LAUNCHER_TEMPLATE = """@echo off
@@ -246,7 +168,7 @@ if %errorlevel%==0 (
     exit /b 1
   )
 )
-%PY% scripts\\serve.py --foreground --open
+%PY% scripts\\serve.py
 """
 
 LINUX_SCRIPT_TEMPLATE = """#!/usr/bin/env bash
@@ -265,7 +187,7 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo
   exit 1
 fi
-exec "$PYTHON_BIN" scripts/serve.py --foreground --open
+exec "$PYTHON_BIN" scripts/serve.py
 """
 
 LINUX_DESKTOP_TEMPLATE = """[Desktop Entry]
@@ -286,6 +208,8 @@ def make_launchers():
     moved anywhere (a Desktop, say) and still find the right app folder.
     Not committed to git (machine-specific paths) -- see .gitignore.
     """
+    import shlex
+
     launchers_dir = os.path.join(PROJECT_ROOT, "launchers")
     os.makedirs(launchers_dir, exist_ok=True)
     quoted_root = shlex.quote(PROJECT_ROOT)
@@ -325,27 +249,25 @@ def make_launchers():
 
 def main():
     args = sys.argv[1:]
-    if "--stop" in args:
-        stop_server()
-        return
     if "--make-launchers" in args:
         make_launchers()
         return
-    foreground = "--foreground" in args
-    open_browser_flag = "--open" in args
+    if "--stop" in args:
+        print("Nothing to stop -- this script no longer runs in the background.")
+        print("Just close its terminal window (or press Ctrl+C) to stop it.")
+        return
+    # --foreground/--open are accepted (but no longer needed) for anyone with an
+    # older double-click launcher lying around that still passes them.
     args = [a for a in args if a not in ("--foreground", "--open")]
 
-    requested_port = DEFAULT_PORT
+    requested_port = configured_port() or DEFAULT_PORT
     if args:
         try:
             requested_port = int(args[0])
         except ValueError:
             print("Ignoring invalid port argument '{}', using default.".format(args[0]))
 
-    if foreground:
-        run_foreground(requested_port, open_browser=open_browser_flag)
-    else:
-        start_background(requested_port)
+    run(requested_port)
 
 
 if __name__ == "__main__":

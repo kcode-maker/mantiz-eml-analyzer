@@ -28,7 +28,7 @@ component, no account, no telemetry, nothing uploaded anywhere.
 
 **New here?** [HELP.md](HELP.md) is the full how-to-use-every-feature guide.
 See [CHANGELOG.md](CHANGELOG.md) for what shipped in each version
-(currently **v1.1.0**).
+(currently **v1.2.0**).
 
 ## Contents
 
@@ -59,22 +59,18 @@ python scripts\serve.py       # Windows (PowerShell or cmd)
 ```
 
 That single script — [`scripts/serve.py`](scripts/serve.py) — is the same
-file on every platform: it starts the server **in the background**, opens
-the app in your browser, and immediately hands your terminal back — it
-doesn't sit there occupying the window. Stop it whenever you're done:
-
-```bash
-python3 scripts/serve.py --stop      # macOS / Linux
-python  scripts\serve.py --stop      # Windows
-```
-
-(Prefer a server that blocks in the foreground so you can watch the access
-log? `python3 scripts/serve.py --foreground` does that instead — `Ctrl+C`
-stops it.)
+file on every platform: it opens the app in your browser and keeps running
+right there in that terminal window. Closing the window (or pressing
+`Ctrl+C`) stops it immediately — nothing to remember, nothing left running
+in the background afterward. It always uses **port 8765** (pass a different
+one, e.g. `python3 scripts/serve.py 9000`, if that's ever already taken) —
+never silently switches ports on you, so the app's URL stays predictable.
+To change the *default* permanently, create a `.mantiz-config.json` file
+next to `index.html`: `{ "port": 9000 }` (gitignored — your own local
+preference, not something the repo ships with).
 
 Prefer a literal double-click instead of typing a command? Use whichever
-of these matches your OS — they just call the same script for you and
-return the same way (background, terminal handed back immediately):
+of these matches your OS — they just call the same script for you:
 
 | OS | Double-click this |
 |---|---|
@@ -100,12 +96,10 @@ so it still finds the app after you move it):
 | Linux | `launchers/Mantiz-EML-Analyzer.desktop` (keep `Mantiz-EML-Analyzer-linux.sh` alongside it, or edit its `Exec=` path if you move only the `.desktop` file) |
 
 Copy the one for your OS to your Desktop (or anywhere) and double-click it
-any time. Unlike the background mode above, **this one runs the server in
-its own window in the foreground and opens your browser automatically** —
-closing that window (or `Ctrl+C`) stops the server immediately, so nothing
-ever keeps running silently in the background after you're done with it.
-If you ever move the *app folder itself*, re-run `--make-launchers` to get
-a launcher pointing at the new location.
+any time — it runs the server in its own window and opens your browser
+automatically, closing that window (or `Ctrl+C`) stops the server
+immediately. If you ever move the *app folder itself*, re-run
+`--make-launchers` to get a launcher pointing at the new location.
 
 See [Install](#install) below for why a server is recommended over just
 opening `index.html` directly, and [Using it](#using-it) for how to actually
@@ -133,7 +127,11 @@ again next time** before dismissing it if you want it back on a later run.
   in a virtualized, VS Code-style file tree (smooth even at very large
   folder sizes) — or **Open Files** for a handful of loose `.eml` files,
   or just drag a folder onto the window.
-- **Tree toolbar**: Collapse All / Expand All, a Name A→Z / Z→A sort toggle
+- **Tree toolbar**: a VS Code-style **⟳ Refresh** button re-reads the
+  folder from disk to pick up files added/removed/renamed by something
+  else (there's no browser API to watch a folder for changes automatically)
+  — only available for a folder opened via **Open Folder** in Chrome/Edge;
+  Collapse All / Expand All, a Name A→Z / Z→A sort toggle
   (folders always sort before files, either direction), and a file-filter
   mode — **".eml files only"** (default) or **"All files (as email)"** for
   folders where messages were renamed to a bare content hash with no
@@ -151,6 +149,16 @@ again next time** before dismissing it if you want it back on a later run.
 - **Multi-tab viewer**, like a code editor: open several emails at once,
   each tab showing a live state icon (parsing / parsed / failed), a
   paperclip badge when it has attachments, and colored dots for its tags.
+  Capped at a max open-tabs count (Settings → IDE config, 1–100, default
+  10) — past the limit, the tab you viewed longest ago closes first to
+  make room for a new one, not simply the first one you opened, so
+  re-visiting an older tab keeps it from being the next one evicted.
+  Explorer shows a small green **ring** right after the file icon for any
+  file that's currently open in a tab, not just the active one — a
+  deliberately different shape/position from the filled, colored dot(s)
+  after the filename for that file's tags (hover either one for exactly
+  what it means: "Open in a tab right now" vs. "Tag: <name>"), so the two
+  are never confused even when a tag's own color happens to be green too.
 - A **breadcrumb path bar** shows the full path of the open email relative
   to the folder root (browsers never expose a picked folder's true OS path
   to a web page — see [Known limitations](#known-limitations) — so this is
@@ -234,6 +242,16 @@ again next time** before dismissing it if you want it back on a later run.
   escaped source text only — never rendered live. A **VirusTotal** button
   opens a hash lookup (`virustotal.com/gui/file/<sha256>`) in a new tab —
   only the hash is looked up, the file itself is never uploaded anywhere.
+  The first meaningful image (inline or attached — whichever comes first,
+  skipping only tiny tracking-pixel-sized images) gets an **Extract text
+  (OCR)** button: runs entirely locally via a vendored OCR engine
+  ([tesseract-wasm](#dependencies--tools-used)) against the already-loaded
+  bytes — no network call, nothing executed, pixel analysis only — and
+  caches the result (in-memory for the tab, and in IndexedDB keyed by the
+  attachment's own SHA-256, so the same image elsewhere or in a later
+  session doesn't re-run OCR). Useful for the common phishing pattern of
+  putting the entire pitch inside one image specifically to dodge
+  text-based filters.
 - **Raw tab**: the exact original bytes of the `.eml` file, line-numbered,
   with one-click copy or re-download of the untouched original.
 - Copy buttons throughout — subject, any header value, any link URL, the
@@ -243,46 +261,75 @@ again next time** before dismissing it if you want it back on a later run.
 ### Search
 - **Search across the whole open folder** like VS Code's "Search across
   files" (`Ctrl`/`Cmd`+`Shift`+`F`):
-  - **Decoded search** (default): a small query grammar —
-    `field:value` for `from:`, `to:`, `subject:`, `url:`, `attachment:`
-    (matches attachment filenames), `meta:`/`header:` (matches across all
-    header values), `tag:`; `"exact phrases"`; `-exclude` terms (works on
-    any field, e.g. `-tag:reviewed`); bare words ANDed together — running
-    over an inverted index built incrementally across a worker pool.
+  - **Decoded search** (default): a small, namespaced query grammar —
+    `field:value` for `header.subject:`, `header.from:`, `header.to:`,
+    `header.cc:`, `header.bcc:`, `header.replyto:`, `header.returnpath:`
+    (address fields match the bare address only, no display name — match
+    the full address for these), `header.messageid:` (exact match on the
+    Message-ID), `header.raw:` (matches across all header values), `url:`,
+    `attachment.filename:`, `attachment.ext:` (exact match on an
+    attachment's extension, include the dot, e.g. `attachment.ext:.exe`),
+    `attachment.sha256:` (exact match, case-insensitive, on an
+    attachment's own hash — computed eagerly for every attachment during
+    indexing, so this covers the whole folder immediately), `attachment.ocr:`
+    (matches text extracted from image attachments — sparse, only covers
+    emails you've run OCR on, see Attachments tab below), `tag:`;
+    `"exact phrases"`; `-exclude` terms (works on any field, e.g.
+    `-tag:reviewed`); bare words ANDed together — running over an inverted
+    index built incrementally across a worker pool.
     **OR and parenthesized grouping**: OR (the literal all-caps word only —
     lowercase `or` is just an ordinary search word) binds looser than the
     implicit AND, and `(...)` groups a sub-expression, including negating a
-    whole group: `(from:paypal OR from:ebay) attachments:>0`,
-    `-(from:paypal OR from:ebay)`.
+    whole group: `(header.from:paypal OR header.from:ebay) attachment.count:>0`,
+    `-(header.from:paypal OR header.from:ebay)`.
     **Numeric fields** support comparison operators glued directly onto
-    the value: `attachments:>3`, `attachments:3` (exact), `size:<2mb`
+    the value: `attachment.count:>3`, `attachment.count:3` (exact), `size:<2mb`
     (accepts b/kb/mb/gb), `urls:>=10`, `recipients:>20`, and
     `duplicates:>1` — how many indexed files share this one's Message-ID/
     content id, for finding every file that's part of a repeated/bulk-sent
     batch — and `urgency:>=3` for the always-on urgency-language score
     (see Signals, above). **Regex**: `field:/pattern/i` runs a real regular expression
-    instead of substring matching, on `subject:`/`from:`/`to:`/
-    `attachment:` (e.g. `attachment:/\.(exe|scr)$/i`) — those are the
-    fields whose full text is retained per file, not just its tokens; use
-    Raw search below for regex over anything else. A full reference is one
+    instead of substring matching, on `header.subject:`/`header.from:`/
+    `header.to:`/`header.cc:`/`header.bcc:`/`header.replyto:`/
+    `header.returnpath:`/`attachment.filename:` (e.g.
+    `attachment.filename:/\.(exe|scr)$/i`) — those are the fields whose full
+    text is retained per file, not just its tokens; use Raw search below for
+    regex over anything else. A full reference is one
     click away via the **?** button next to the search box. A term or
     value that can't be resolved (too short to tokenize, an unparseable
     comparison, or an invalid regex) deliberately matches *nothing* rather
     than silently matching the whole folder, with a note explaining why —
     important for a tool where "I searched and found nothing" needs to be
-    trustworthy.
+    trustworthy. **Note**: this is a hard rename from the old flat
+    `from:`/`to:`/`attachment:`/`attachments:`/`meta:`/`header:` syntax —
+    those no longer parse as fields.
   - **`Aa` / `.*` toggle buttons** below the Search button (VS Code-style,
     shared with Raw search below) — **Match Case** verifies exact case for
     quoted phrases and any term, and **Use Regex** treats the whole search
     box as one pattern, ignoring `field:`/phrase/`tag:` syntax. Both are
-    scoped to subject/from/to/attachment (the fields with retained raw
-    text, same as `field:/pattern/` above) — a status-line note says so
+    scoped to the fields with retained raw text (same set regex is limited
+    to, above) — a status-line note says so
     whenever either is on, and an invalid pattern matches nothing rather
     than crashing or matching everything.
   - **Raw search**: greps the untouched original bytes of every file
     instead, using the same `Aa`/`.*` toggles — the fast, always-available
     path that skips MIME decoding entirely, so nothing hidden by encoding
     is ever missed, and (unlike Decoded search) covers the full raw body.
+  - **Files to include/exclude**: a VS Code-style collapsible filter below
+    the search box — plain substring matching against the path, with
+    optional `*`/`?` wildcards (e.g. `invoices/*`, `*.msg`), exclude always
+    winning over include. Works identically in Decoded and Raw search.
+  - **Select some/all results**: a Gmail-style checkbox on every result row
+    plus a master select-all/indeterminate/none checkbox above the list
+    (Shift/Ctrl-click range/toggle-select also works, same as the Explorer
+    tree). Right-click a row (or the current selection) for **Copy
+    path(s)**, **Copy file name(s)** (clipboard only, always available),
+    **Extract OCR (selected)** (see below), or the same
+    Move/Copy-to-folder/Delete actions as Explorer.
+  - A rule card's **View matches** button and a tag's **View files** button
+    (Rules/Tags panels) list that rule's/tag's emails right here in Search,
+    with the exact same select-all/bulk-action tools — clustering-then-
+    moving works identically no matter how the cluster was found.
 
 ### Tag and automate — the rules engine
 - **Manual tagging**: add freeform tags to any email from its Preview tab
@@ -292,7 +339,9 @@ again next time** before dismissing it if you want it back on a later run.
   triage work. Tags carry provenance internally (manually-typed vs.
   rule-applied) — an identically-named manual tag and rule tag on the same
   email stay independent, so disabling the rule never strips the one you
-  typed by hand.
+  typed by hand. Remove a tag from one email via the **×** on its chip in
+  Preview, or **Delete tag** in the Tags panel to remove it from every
+  email at once (the emails themselves are never touched).
 - **Save to folder** (Chrome/Edge, folder opened with write access): writes
   every tag/note as a `mantiz-tags.json` sidecar file at the workspace
   root — a portable alternative to Export/Import that travels with the
@@ -385,11 +434,14 @@ again next time** before dismissing it if you want it back on a later run.
 
 ### Organize and clean up
 - **IOC export**: a small link under the search box downloads one CSV
-  (`type,value,email_count`) covering every currently-indexed email's
-  sender domains, URL/link domains, attachment extensions, financial
-  indicator types, and a sender-domain-anomaly count (name-mismatch/
-  lookalike/punycode) — the aggregate artifact for a blocklist or incident
-  report, without reading it off one email at a time.
+  (`type,value,email_count`) covering sender domains, URL/link domains,
+  attachment extensions, financial indicator types, and a sender-domain-
+  anomaly count (name-mismatch/lookalike/punycode) — the aggregate
+  artifact for a blocklist or incident report, without reading it off one
+  email at a time. Scopes itself automatically to whatever the Search tab
+  is currently showing: an explicit selection first, else the current
+  search/rule/tag results, else (nothing shown) the whole indexed folder —
+  the button's own tooltip always says which.
 - **Case-report export**: a button in the Tags panel generates a
   shareable Markdown report of every tagged email, grouped by tag, with
   subject/from/date/path — for handing off triage results instead of
@@ -398,10 +450,22 @@ again next time** before dismissing it if you want it back on a later run.
   index), a collapsible "⚠ N file(s) failed to parse" panel under the tree
   filter lists which ones and why — the file that fails to parse might be
   the most interesting one, not just noise to discard.
+- **Copy path(s) / Copy file name(s)**: at the top of that same right-click
+  menu, always available regardless of write access — newline-joined, one
+  per line, so they paste cleanly into a ticket or a shell loop.
+- **Extract OCR (selected)**: same right-click menu — runs OCR on each
+  selected email's first meaningful image, one at a time, skipping
+  anything already cached, with a live "N/M" progress count and a Stop
+  button in the status bar. Always scoped to your current selection —
+  narrow it down with a search, a rule's matches, or a tag's members
+  first — never a single "OCR the whole folder" button, since OCR runs
+  through one shared engine instance and is inherently sequential (see
+  Attachments tab, below, for what it extracts and its limitations).
 - **Delete / Move / Copy** (Chrome/Edge, folder opened via **Open Folder**
   with write access granted): right-click a file, a multi-selection, a tag
-  in the Tags panel, or a rule card in the Rules panel — each resolves the
-  right set of emails and opens the same menu.
+  in the Tags panel, a rule card in the Rules panel, or a Search result (or
+  selection) — each resolves the right set of emails and opens the same
+  menu.
   - **Delete** moves the file(s) into a `.deleted` folder at the root of
     the open folder rather than truly removing them — reversible, and that
     folder (and its contents) is completely hidden from the tree, search,
@@ -420,7 +484,18 @@ again next time** before dismissing it if you want it back on a later run.
 ### Settings
 The gear icon at the top-right of the toolbar opens Settings as a full-width
 page in the right pane (like an IDE's Settings editor tab), not a cramped
-sidebar panel:
+sidebar panel — a left category list (IDE Config / Trusted Domains / Domain
+Categories) plus a detail pane that fills the rest of the width, VS Code
+Settings-editor style. Each section's longer explanation starts collapsed
+behind a small **ⓘ** you click to expand, so the page itself stays scannable:
+- **IDE config**: max open tabs (1–100, default 10) — see Multi-tab viewer,
+  above, for the LRU eviction behavior this controls — plus a read-only
+  **Server port** line showing which port you're currently running on. It
+  can't be edited here: the browser page only loads *after*
+  `scripts/serve.py` has already started and bound to a port, so nothing
+  running in the page can reach back and change that — edit
+  `.mantiz-config.json` (see [Quick start](#quick-start-one-command-every-os))
+  and restart the server instead.
 - **Trusted domains**: the list used by the sender-spoofing checks above,
   pre-filled with a small built-in brand list. Add your own organization's
   domain(s) so impersonation of *your* company is caught too, not just
@@ -465,9 +540,9 @@ recommended.
 ### Why a local server is recommended
 
 `scripts/serve.py` starts a plain local static server on
-`http://localhost:8765` (or the next free port) serving nothing but the
-files in this folder, to your own machine only, then opens your browser to
-it. Running over `http://localhost` instead of a plain `file://` page
+`http://localhost:8765` (always that exact port, unless you pass a
+different one) serving nothing but the files in this folder, to your own
+machine only, then opens your browser to it. Running over `http://localhost` instead of a plain `file://` page
 unlocks Web Workers (parallel background parsing/search/rule-evaluation
 across all your CPU cores) and `crypto.subtle` (attachment SHA-256
 hashing) — both are disabled by Chromium-based browsers on `file://`
@@ -499,10 +574,11 @@ batches.
 | Library | Version | License | Used for |
 |---|---|---|---|
 | [DOMPurify](https://github.com/cure53/DOMPurify) | 3.1.6 | Apache-2.0 OR MIT | Sanitizing attacker-controlled HTML email bodies before they're rendered — see [`vendor/VENDOR.md`](vendor/VENDOR.md) for the exact file, source URL, and SHA-256 to verify it hasn't been tampered with. |
+| tesseract-wasm | 0.11.0 | BSD-2-Clause | Local, offline OCR text extraction for the first meaningful image attachment/inline image in the Attachments tab — runs entirely client-side against already-in-memory bytes, no network call. See [`vendor/VENDOR.md`](vendor/VENDOR.md) for the exact files, source, and SHA-256 to verify it hasn't been tampered with. |
 
-That's the **only** third-party library this app uses. Everything else — the
-MIME/RFC 5322 parser, the search index, the rules engine, the UI — is
-hand-written specifically for this app with no further dependencies (see
+Two third-party libraries total. Everything else — the MIME/RFC 5322
+parser, the search index, the rules engine, the UI — is hand-written
+specifically for this app with no further dependencies (see
 [Architecture](#architecture)).
 
 ### Browser platform APIs relied on
@@ -607,6 +683,7 @@ clear at a glance which layer a given file belongs to.
 | `js/indexing/workerClient.js` | A pool of Workers (one per CPU core) with a synchronous, yielding fallback; streams a huge file list through the pool with bounded concurrency so memory never holds more than a small window of files at once. |
 | `js/indexing/searchIndex.js` | Main-thread decoded search: structure-of-arrays metadata + an inverted index built incrementally from worker results, plus the query grammar/ranking. |
 | `js/indexing/rawSearch.js` | Orchestrates a parallel, cancelable, streaming raw-byte grep across the open folder. |
+| `js/indexing/pathFilter.js` | The VSCode-style "files to include/exclude" path filter (plain substring matching, optional `*`/`?` wildcards) — a small pure module shared identically by `searchIndex.js` and `rawSearch.js` so the two search modes can never drift apart on it. |
 | `js/rules/rulesStore.js` | IndexedDB CRUD for rule definitions plus the per-rule "current match set" that makes disabling/renaming exact and instant. |
 | `js/rules/rulesEngine.js` | Runs enabled rules across the pool, diffs new vs. previous match sets, applies exactly the tag add/remove operations needed; the dry-run "Test" path. Threads the user's trusted-domains list into every run. |
 | `js/rules/ruleTemplates.js` | The 27 starter rule templates (`EV.RULE_TEMPLATES`) — a DOM-free module so `tests/ruleTemplates.test.js` can compile-check every one under `jsc`. |
@@ -616,7 +693,7 @@ clear at a glance which layer a given file belongs to.
 | `js/ui/tabs.js` / `js/ui/render.js` | Multi-tab email viewer (with live tab icons/badges) and its sub-views, including the Signals badges and WHOIS buttons. |
 | `js/ui/icons.js` | A small dependency-free inline-SVG icon set used throughout the toolbar/tree/tabs/context menus. |
 | `js/core/tags.js` / `js/core/db.js` | IndexedDB-backed tags/notes, keyed by `Message-ID` (content-hash fallback), with JSON export/import. |
-| `js/core/settings.js` | The user-editable trusted-domains list (used by the spoof-detection helpers) and the sample-emails demo banner's dismissed/always-show state, both IndexedDB-backed. |
+| `js/core/settings.js` | The user-editable trusted-domains list (used by the spoof-detection helpers), domain categories, the max-open-tabs setting, and the sample-emails demo banner's dismissed/always-show state, all IndexedDB-backed. |
 | `js/core/whois.js` | The WHOIS/RDAP domain-age lookup — the app's one genuine outbound `fetch()`, gated behind an explicit per-domain click. |
 | `js/core/session.js` | Persists what was open so the app can offer to resume it. |
 
@@ -688,15 +765,35 @@ files) plus a syntax check of every `js/**/*.js` file; CI
   Opening that same folder later, even in a different browser/machine,
   detects the sidecar and offers to load it back in.
 - **Search grammar** (`field:value`, `"phrase"`, `-exclude`, bare AND
-  terms, regex on four fields, plus `OR`/`(...)` grouping) has no way to
+  terms, regex on eight fields, plus `OR`/`(...)` grouping) has no way to
   express arbitrary boolean nesting beyond AND/OR/NOT (e.g. no XOR, no
-  operator precedence override beyond parentheses). Body/meta phrase
-  queries are "all these words present", not strict word-adjacency
-  (subject/from/to phrase queries *are* verified exactly, since those
+  operator precedence override beyond parentheses). Body/`header.raw`
+  phrase queries are "all these words present", not strict word-adjacency
+  (the raw-text header fields *are* verified exactly, since those
   fields are cheap to keep in full) — this is a deliberate, permanent
   tradeoff for memory-bounded search at 500K files, not a gap being
   tracked for a fix. Rules don't have this limitation at all since they're
   full JS expressions.
+- **OCR (Attachments tab) is English-only for now**, uses the
+  speed-optimized `tessdata_fast` model (a deliberate accuracy-for-speed
+  tradeoff appropriate for an interactive per-click action, not a batch
+  pipeline — don't treat its output as ground truth on noisy/low-quality
+  images), and only ever covers the first meaningful image per email, not
+  every image — see Attachments tab, above. The first OCR click each
+  session pays a one-time ~1-3s cost to start the engine; per-image wasm
+  memory isn't released until the tab is closed (only the vendored engine's
+  own limitation, not something this app works around). **Reverse-contrast
+  text (light text on a solid dark/colored button or banner) is
+  prone to being missed entirely**, confirmed live against a real
+  phishing-template screenshot — every normal dark-on-light line OCR'd
+  correctly, but a white-on-blue "Open" button's label did not; every
+  other line in the same image OCR'd correctly, so this is a genuine
+  model-accuracy gap on that specific pattern, not a bug in how this app
+  passes image bytes to the engine. Because `attachment.ocr:` search is
+  itself sparse/opportunistic by design (only covers attachments a user
+  has explicitly clicked OCR on — see Search, above), don't treat a
+  missing `attachment.ocr:` result as proof an image contains no matching
+  text at all.
 - **Delete/Move/Copy require Chrome or Edge**, a folder opened via **Open
   Folder** (not the fallback picker or drag-and-drop), and write
   permission granted when prompted — see

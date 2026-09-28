@@ -129,6 +129,23 @@
         return putOrPrune(rec);
       });
     },
+    /** Removes a tag from every record that currently has it, regardless of provenance (manual or
+     * rule-applied) -- the Tags panel's "Delete tag" action. Deliberately does NOT touch the rule
+     * itself: if a still-enabled rule asserts this tag, its next run simply re-applies it, since a
+     * tag being removed here isn't the same thing as the rule that keeps re-creating it being turned
+     * off -- disable or delete that rule too for the removal to actually stick. Returns the number of
+     * emails the tag was removed from. */
+    removeTagEverywhere: function (tagName) {
+      return EV.db.getAll(STORE).then(function (records) {
+        var affected = records.filter(function (r) { return effectiveTags(r).indexOf(tagName) !== -1; });
+        return Promise.all(affected.map(function (r) {
+          var rec = migrate(r);
+          rec.manualTags = rec.manualTags.filter(function (t) { return t !== tagName; });
+          delete rec.ruleTagOwners[tagName];
+          return putOrPrune(rec);
+        })).then(function () { return affected.length; });
+      });
+    },
     setNote: function (id, note) {
       return rawGet(id).then(function (rec) {
         rec = migrate(rec || { id: id });

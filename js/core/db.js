@@ -8,7 +8,7 @@
   var EV = g.EV || (g.EV = {});
 
   var DB_NAME = 'MantizEmlAnalyzerDB';
-  var DB_VERSION = 3;
+  var DB_VERSION = 4;
   var dbPromise = null;
 
   function openDb() {
@@ -29,6 +29,10 @@
           store.createIndex('by_rule', 'ruleId', { unique: false });
         }
         if (!db.objectStoreNames.contains('settings')) db.createObjectStore('settings', { keyPath: 'service' });
+        // Content-addressed cache of OCR results, keyed by the attachment's own SHA-256 hash --
+        // see ocrCache.js. The same image attachment appearing in multiple emails, or the same
+        // folder reopened in a later session, reuses one cached OCR run instead of repeating it.
+        if (!db.objectStoreNames.contains('ocrResults')) db.createObjectStore('ocrResults', { keyPath: 'sha256' });
       };
       // Fires when another open tab/window is holding an older-version
       // connection open, which would otherwise leave this open() request

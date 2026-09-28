@@ -3,6 +3,189 @@
 All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] — 2026-09-28
+
+### Added
+
+- **Search results bulk actions**: Gmail-style checkboxes on every result row
+  plus a master select-all/indeterminate/none checkbox above the list
+  (alongside the existing Explorer-style Shift/Ctrl-click range/toggle-
+  select), a live "N of M selected" count, and right-click → **Copy
+  path(s)** / **Copy file name(s)** (clipboard-only, always available) next
+  to the existing Move/Copy-to-folder/Delete actions.
+- **Rules and Tags panels: "View matches" / "View files"** — lists a rule's
+  matched emails or a tag's members in the Search tab, with the exact same
+  select-all/multi-select/right-click bulk actions Search already has, so
+  clustering-then-moving works identically no matter how the cluster was
+  found.
+- **VSCode-style "files to include/exclude" path filter**
+  (`js/indexing/pathFilter.js`), shared identically by Decoded and Raw
+  search — plain substring matching with optional `*`/`?` wildcards,
+  exclude always wins over include.
+- **Export IOCs (CSV) now scopes itself** to whatever the Search tab is
+  currently showing: an explicit multi-selection first, else the current
+  search/rule/tag results, else (nothing shown) the whole indexed folder —
+  shown live in the button's own tooltip.
+- **Configurable max open tabs** (Settings → IDE config, 1–100, default
+  10): the tab you viewed longest ago is evicted first (LRU) once you're
+  over the limit, not simply the first one you opened — re-selecting an
+  older tab keeps it from being the next one closed.
+- **Explorer shows a small green ring** right after the file icon for any
+  file currently open in a tab (not just the active one), updated live as
+  tabs open/close — deliberately a different shape/position from a tag's
+  filled color dot(s) after the filename, so the two are never confused
+  even when a tag's hash-assigned color happens to also be green.
+- **Delete tag** (Tags panel): removes a tag from every email that carries
+  it, in one click — the emails themselves are never touched. A still-
+  enabled rule that applies the tag will simply re-add it on its next run,
+  so this is for a manually-typed tag or one whose rule you've already
+  retired.
+- **`.mantiz-config.json`**: a small, gitignored, machine-specific config
+  file (`{"port": 9000}`) next to `index.html` that `scripts/serve.py` now
+  reads for its default port, instead of always assuming 8765 — a CLI port
+  argument still overrides it for a single run. Settings → IDE config
+  shows a read-only "Server port" line reflecting whatever port you're
+  actually running on, with a pointer to this file — it can't be an
+  editable/functional control there, since the browser page only loads
+  *after* the server has already started and bound to a port.
+- Thirteen new regression assertions across `tests/settings.test.js`,
+  `tests/detections.test.js`, `tests/tags.test.js`, plus a new
+  `tests/pathFilter.test.js` (23 assertions) and 2 new
+  `tests/searchIndex.test.js` cases for the include/exclude filter — 327
+  assertions across 10 files, up from 284/9.
+- **OCR for image attachments** (Attachments tab): a "🔎 Extract text
+  (OCR)" button on the first meaningful image per email (over a 512-byte
+  size floor, inline or regular attachment alike — a large inline image
+  is often exactly where a real phishing screenshot lives), running
+  locally via a newly-vendored `tesseract-wasm` (BSD-2-Clause, see
+  `vendor/VENDOR.md`) — no network call, nothing executed, pixel analysis
+  only. Results are cached in IndexedDB keyed by the attachment's own
+  SHA-256 (`js/core/ocrCache.js`), so the same image reused across
+  emails, or the same folder reopened later, reuses one cached OCR run.
+  `js/core/ocrBridge.js` is the app's one deliberate `<script
+  type="module">` (still zero build step — a native browser feature, no
+  bundler) since `tesseract-wasm` ships as a genuine ES module.
+- **`attachment.ocr:` search field**, wired to that same OCR cache: text
+  extracted by an OCR click is pushed straight into the live search
+  index (`searchIndex.js`'s `addOcrText`/`ocrStats`), so it's searchable
+  immediately, with zero OCR ever run automatically or at search time.
+  Deliberately sparse — only covers emails a user has actually clicked
+  OCR on — and the search-results status line shows a live "OCR
+  coverage: N email(s) OCR-indexed so far — not exhaustive" note
+  whenever a query touches this field, so that partial coverage is never
+  mistaken for a complete answer.
+- **Bulk "Extract OCR (selected)"**: a new right-click action — on any
+  multi-selection or single file in Explorer, Search results, or a
+  rule's/tag's "View matches"/"View files" list (all four share one
+  context menu, so this one addition covers every surface at once) — that
+  runs OCR on each selected email's first meaningful image, one at a
+  time, skipping anything already cached, with a live "N/M" progress
+  count and a Stop button in the status bar. Deliberately scoped to
+  whatever's selected, never "the whole folder" in one click — OCR runs
+  through one shared, page-session engine instance and is inherently
+  sequential, so an unscoped whole-folder version could run for hours at
+  this app's ~500K-file scale target; use the existing search/rule/tag
+  filters to narrow down to the batch you actually want OCR'd first.
+- **`attachment.sha256:` search field** — unlike `attachment.ocr:`, this
+  one is eager and covers every attachment in the folder immediately:
+  each attachment's SHA-256 is now computed during the normal indexing
+  pass (the bytes are already fully decoded in memory at that point, and
+  hashing them is cheap — nothing like OCR's per-image cost), so there's
+  no "click something first" step and no partial-coverage caveat. Search
+  by a known-bad hash from a threat-intel feed or a VirusTotal result to
+  find every email carrying that exact file, across the whole folder, at
+  full indexing speed.
+- **Explorer "Refresh" button** (VS Code-style, ⟳ in the tree toolbar) —
+  re-reads the open folder from disk to pick up files added, removed, or
+  renamed by something other than this app (there's no live filesystem-
+  watch API in browsers, so this app never notices on its own). Only
+  meaningful for a folder opened via **Open Folder** (Chrome/Edge); shows
+  a toast explaining why for a folder opened any other way, since only
+  the native picker's folder handle can be re-read from disk. Keeps
+  already-open tabs open (closing only ones for a file that no longer
+  exists) rather than closing everything, unlike the same reload this
+  app already used internally after Delete/Move/Copy.
+- **Namespaced `header.*`/`attachment.*` search grammar** replacing the
+  old flat field prefixes (`from:`, `to:`, `attachment:`, `attachments:`,
+  `meta:`/`header:`) — a hard rename, see Changed below — plus five
+  fields that weren't searchable at all before: `header.cc`,
+  `header.bcc`, `header.replyto`, `header.returnpath` (exact full-address
+  match — same tokenizer limitation the old `to:` already had),
+  `header.messageid` (exact match), and `attachment.ext` (exact
+  extension match, e.g. `attachment.ext:.exe`).
+- **Links panel shows the exact source of an empty-text link's action**
+  instead of one generic "(image or empty link)" placeholder — e.g.
+  `[Image: Open shared file]` when the link's only content is an image
+  (using its `alt` text when present), or `(empty link text)` when
+  there's truly nothing — since an image used as a fake "click here"
+  button is a common phishing template pattern worth calling out
+  specifically.
+
+### Changed
+
+- **Settings page redesigned as a VS Code-style two-pane layout**: a left
+  category nav (IDE Config / Trusted Domains / Domain Categories) plus a
+  right detail pane that actually fills the available width, instead of
+  every section stacked in one column capped at 640px regardless of window
+  size. Each section's long explanatory paragraph now starts collapsed
+  behind a small "ⓘ" toggle instead of always taking up space.
+- `python3 scripts/serve.py` **simplified to a single foreground mode** —
+  it always opens your browser and runs until you close that terminal
+  window or press Ctrl+C, exactly like the desktop launchers already did.
+  The old default (start detached in the background, requiring a separate
+  `--stop` command to remember) is gone entirely, along with its PID-file/
+  log-file bookkeeping. It also always binds to exactly **port 8765** now
+  (or an explicit port you pass) instead of silently drifting to the next
+  free one if 8765 happened to be busy — a clear error tells you to close
+  whatever's using it, or pass a different port, instead.
+- **Search field names are namespaced now — a breaking, hard rename**:
+  `from:`/`to:`/`attachment:`/`attachments:`/`meta:`/`header:` no longer
+  parse as fields at all (they fall through to matching as a literal bare
+  word instead). Use `header.from:`/`header.to:`/`attachment.filename:`/
+  `attachment.count:`/`header.raw:` respectively — see Added above for
+  every new field this namespacing unlocked. Nothing persisted (no saved
+  searches, no export format) depended on the old syntax, so there's
+  nothing to migrate.
+
+### Fixed
+
+- **Domain-category false positives**: the default "URL Shortener"/"File
+  Sharing" keywords `t.co`/`box.com` matched via an unanchored substring
+  check, so any domain merely *containing* those characters false-flagged
+  — `target.com`, `microsoft.com`, `walmart.com` as "URL Shortener";
+  `mailbox.com`, `inbox.com` as "File Sharing". Fixed by anchoring any
+  keyword shaped like a real domain (contains a `.`) to an exact-or-
+  subdomain match; a bare keyword with no dot keeps its existing
+  intentionally-flexible substring behavior.
+- **`mailto:`/`tel:` links no longer appear in the Links panel** — only
+  real `http(s)`/`www` links are listed now (IOC rollups and rules already
+  only ever considered real web links, so this was a display-only leak).
+- **`setMaxOpenTabs(0)` silently reset to the default of 10** instead of
+  clamping to 1, because `Math.round(0) || 10` evaluates the fallback (a
+  classic falsy-zero bug) — caught by an automated regression test before
+  it shipped anywhere live.
+- **A space right after `field:` (e.g. `header.from: paypal`) silently
+  zeroed out every search result**, with no warning explaining why —
+  reported live against `attachment.ocr: shared document`. The leading
+  space made the value-parser match nothing, so the whole `field:` span
+  fell through to becoming its own literal (almost never-matching) bare
+  word, ANDed into the rest of the query. Fixed by tolerating whitespace
+  right after the colon before parsing the value — `field: value` and
+  `field:value` now parse identically; the value still stops at the next
+  whitespace/paren exactly as before, so a multi-word value still needs
+  quotes (`field: "two words"`), same as it always has.
+- **The "↻ Resume '…'" toolbar button showed a permanently stale folder
+  name** — reported live as always showing an old folder ("healthcare_themed")
+  no matter what was opened afterward, even in the same browser tab. It's
+  rendered once, from whatever was saved at the moment the page first
+  loaded, and was never hidden or refreshed again except by its own
+  click-to-resume handler — so opening any *other* folder (Open Folder,
+  drag-and-drop, the sample-emails demo) correctly updated the saved
+  session underneath, but left the visible button frozen on the old text
+  forever. Fixed by hiding it the moment any folder actually opens, for
+  any reason — it's only ever meaningful in the "nothing open yet" moment
+  right after a fresh page load, which is the only time it's shown now.
+
 ## [1.1.0] — 2026-09-24
 
 ### Added

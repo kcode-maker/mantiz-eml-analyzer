@@ -86,6 +86,31 @@ step(function () {
   });
 });
 
+// maxOpenTabs defaults to 10, persists a valid value, and clamps out-of-range input to [1, 100]
+step(function () {
+  return EV.settings.maxOpenTabs().then(function (n) {
+    assert(n === 10, 'maxOpenTabs defaults to 10 before any config (' + n + ')');
+  });
+});
+step(function () { return EV.settings.setMaxOpenTabs(25); });
+step(function () {
+  return EV.settings.maxOpenTabs().then(function (n) {
+    assert(n === 25, 'setMaxOpenTabs persists a valid in-range value (' + n + ')');
+  });
+});
+step(function () { return EV.settings.setMaxOpenTabs(500); });
+step(function () {
+  return EV.settings.maxOpenTabs().then(function (n) {
+    assert(n === 100, 'setMaxOpenTabs clamps a too-large value down to 100 (' + n + ')');
+  });
+});
+step(function () { return EV.settings.setMaxOpenTabs(0); });
+step(function () {
+  return EV.settings.maxOpenTabs().then(function (n) {
+    assert(n === 1, 'setMaxOpenTabs clamps a too-small/zero value up to 1 (' + n + ')');
+  });
+});
+
 // domainCategories seeds from DEFAULT_DOMAIN_CATEGORIES, never silently empty (and never the same
 // array reference as the default, so mutating one doesn't corrupt the other)
 step(function () {

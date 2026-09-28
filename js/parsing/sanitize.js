@@ -158,9 +158,29 @@
       el.textContent = rewriteCssUrls(el.textContent, resolveUrl);
     });
     var links = [];
+    // Same accepted-scheme list EV.extractUrls (urlExtract.js) already uses for its own output filter --
+    // a mailto:/tel:/anything-else anchor was never a "link" a phishing analyst needs to triage here (no
+    // destination to scan/WHOIS), and showing one in the Links panel alongside real URLs was just noise
+    // (worse, it offered a "Scan URL" button that would send the literal "mailto:..." string to VirusTotal).
+    var LINK_SCHEME_RE = /^(https?|hxxps?|ftp|www\.)/i;
     root.querySelectorAll('a[href]').forEach(function (a) {
       var hrefRaw = a.getAttribute('href') || '';
+      if (!LINK_SCHEME_RE.test(hrefRaw)) return;
       var text = (a.textContent || '').trim();
+      if (!text) {
+        // No text at all -- describe what's actually clickable instead of a vague generic fallback.
+        // (DOMPurify's FORBID_TAGS unwraps <button>/<form> etc. and keeps their text content, so by
+        // the time this loop runs a button-wrapped anchor already has real a.textContent -- an image
+        // is the only common "no text" case left in practice, e.g. a "click here" image-as-button,
+        // a recognizable phishing template pattern worth calling out specifically.)
+        var img = a.querySelector('img');
+        if (img) {
+          var alt = (img.getAttribute('alt') || '').trim();
+          text = alt ? '[Image: ' + alt + ']' : '[Image]';
+        } else {
+          text = '(empty link text)';
+        }
+      }
       a.setAttribute('target', '_blank');
       a.setAttribute('rel', 'noopener noreferrer nofollow');
       a.classList.add('ev-link');

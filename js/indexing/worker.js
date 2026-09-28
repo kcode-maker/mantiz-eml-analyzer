@@ -14,7 +14,7 @@ self.onmessage = async function (e) {
         var f = msg.files[i];
         try {
           var buf = await f.blob.arrayBuffer();
-          docs.push(self.EV.buildIndexDoc(f.fileId, f.path, buf, msg.opts));
+          docs.push(await self.EV.buildIndexDoc(f.fileId, f.path, buf, msg.opts));
         } catch (err) {
           docs.push({ fileId: f.fileId, path: f.path, subject: '(failed to parse)', fromName: '', fromAddr: '',
             toStr: '', dateMs: null, size: f.blob.size || 0, attNames: '', urlCount: 0, fieldTokens: {}, skipped: true, error: String(err) });

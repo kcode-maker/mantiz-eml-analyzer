@@ -53,20 +53,35 @@
   'use strict';
   var EV = g.EV || (g.EV = {});
 
-  var FIELDS = ['subject', 'from', 'to', 'body', 'url', 'attachment', 'meta'];
-  var FIELD_WEIGHT = { subject: 6, from: 3, to: 3, url: 4, attachment: 3, body: 1, meta: 1 };
-  var FIELD_ALIASES = { header: 'meta', headers: 'meta', filename: 'attachment' };
+  // Internal storage/token-index keys -- stable regardless of query-syntax renames (see
+  // QUERY_FIELD_MAP below, which is the only place a user-facing field name is resolved).
+  // 'ocr' is deliberately sparse -- populated only for attachments a user has actually clicked
+  // "Extract text (OCR)" on (see addOcrText/ocrStats below), never during the eager indexing pass
+  // (running real OCR against every image in a folder up front is completely incompatible with
+  // this app's ~500K-file scale target). Still included in FIELDS (and therefore in a bare-word
+  // "any" search) so a plain search finds OCR'd text too, per the original ask.
+  var FIELDS = ['subject', 'from', 'to', 'cc', 'bcc', 'replyto', 'returnpath', 'body', 'url', 'attachment', 'meta', 'ocr'];
+  var FIELD_WEIGHT = { subject: 6, from: 3, to: 3, cc: 2, bcc: 2, replyto: 3, returnpath: 3, url: 4, attachment: 3, body: 1, meta: 1, ocr: 2 };
+  // User-facing query field name (as typed after a leading "field:") -> internal storage key.
+  // A hard rename from the old flat names (from:/to:/attachment:/attachments:/meta:/header:) --
+  // those no longer parse as fields at all once this map replaced FIELD_ALIASES.
+  var QUERY_FIELD_MAP = {
+    'header.subject': 'subject', 'header.from': 'from', 'header.to': 'to',
+    'header.cc': 'cc', 'header.bcc': 'bcc', 'header.replyto': 'replyto', 'header.returnpath': 'returnpath',
+    'header.raw': 'meta', 'attachment.filename': 'attachment', 'attachment.ocr': 'ocr',
+    body: 'body', url: 'url'
+  };
 
   // field:/pattern/i — supported only on fields whose raw (untokenized)
   // string is retained per-file (checked below), since regex needs to run
   // against the real text, not word postings. Not anchored to word
   // boundaries; test it against the whole stored value for that field.
   var REGEX_VALUE_RE = /^\/(.+)\/([a-z]*)$/i;
-  var REGEX_ELIGIBLE_FIELDS = { subject: 1, from: 1, to: 1, attachment: 1 };
+  var REGEX_ELIGIBLE_FIELDS = { subject: 1, from: 1, to: 1, cc: 1, bcc: 1, replyto: 1, returnpath: 1, attachment: 1 };
 
   var SIZE_UNIT_MULTIPLIER = { b: 1, kb: 1024, mb: 1024 * 1024, gb: 1024 * 1024 * 1024 };
   // query field name -> internal per-file numeric array name
-  var NUMERIC_FIELDS = { attachments: 'attCounts', size: 'sizes', urls: 'urlCounts', recipients: 'recipientCounts', duplicates: 'duplicateCounts', urgency: 'urgencyScores' };
+  var NUMERIC_FIELDS = { 'attachment.count': 'attCounts', size: 'sizes', urls: 'urlCounts', recipients: 'recipientCounts', duplicates: 'duplicateCounts', urgency: 'urgencyScores' };
   var NUMERIC_VALUE_RE = /^(>=|<=|!=|>|<|=)?\s*([0-9]+(?:\.[0-9]+)?)\s*(b|kb|mb|gb)?$/i;
 
   EV.createSearchIndex = function (pool) {
@@ -75,6 +90,11 @@
     var fromAddrs = [];
     var fromNames = [];
     var toStrs = [];
+    var ccStrs = [];
+    var bccStrs = [];
+    var replyToStrs = [];
+    var returnPathStrs = [];
+    var messageIds = [];
     var dateMs = [];
     var sizes = [];
     var attCounts = [];
@@ -83,6 +103,7 @@
     var fromDomains = [];
     var urlDomainsPerFile = [];
     var attExtsPerFile = [];
+    var attSha256PerFile = [];
     var attNamesRaw = [];
     var nameMismatchFlags = [];
     var lookalikeDomainFlags = [];
@@ -96,6 +117,10 @@
     var fieldIndex = {};
     FIELDS.forEach(function (f) { fieldIndex[f] = new Map(); });
     var pathToFileId = new Map();
+    // Which fileIds currently have OCR postings in fieldIndex.ocr -- see addOcrText below.
+    // Sparse by design: only ever contains a fileId once a user has actually clicked
+    // "Extract text (OCR)" on one of its attachments, never the whole indexed corpus.
+    var ocrCoveredFileIds = new Set();
     var total = 0;
     var indexedCount = 0;
     var skippedCount = 0;
@@ -162,6 +187,11 @@
       fromAddrs[doc.fileId] = doc.fromAddr || '';
       fromNames[doc.fileId] = doc.fromName || '';
       toStrs[doc.fileId] = doc.toStr || '';
+      ccStrs[doc.fileId] = doc.ccStr || '';
+      bccStrs[doc.fileId] = doc.bccStr || '';
+      replyToStrs[doc.fileId] = doc.replyToStr || '';
+      returnPathStrs[doc.fileId] = doc.returnPathStr || '';
+      messageIds[doc.fileId] = doc.messageId ? doc.messageId.toLowerCase() : null;
       dateMs[doc.fileId] = doc.dateMs;
       sizes[doc.fileId] = doc.size || 0;
       attCounts[doc.fileId] = doc.attCount || 0;
@@ -170,6 +200,7 @@
       fromDomains[doc.fileId] = doc.fromDomain || '';
       urlDomainsPerFile[doc.fileId] = doc.urlDomains || [];
       attExtsPerFile[doc.fileId] = doc.attExts || [];
+      attSha256PerFile[doc.fileId] = doc.attSha256s || [];
       attNamesRaw[doc.fileId] = doc.attNames || '';
       nameMismatchFlags[doc.fileId] = !!doc.nameMismatch;
       lookalikeDomainFlags[doc.fileId] = !!doc.lookalikeDomain;
@@ -193,12 +224,14 @@
 
     function reset() {
       paths = []; subjects = []; fromAddrs = []; fromNames = []; toStrs = [];
+      ccStrs = []; bccStrs = []; replyToStrs = []; returnPathStrs = []; messageIds = [];
       dateMs = []; sizes = []; attCounts = []; urlCounts = []; recipientCounts = []; emailIds = []; authInfo = [];
-      fromDomains = []; urlDomainsPerFile = []; attExtsPerFile = []; attNamesRaw = []; skippedFileList = [];
+      fromDomains = []; urlDomainsPerFile = []; attExtsPerFile = []; attSha256PerFile = []; attNamesRaw = []; skippedFileList = [];
       nameMismatchFlags = []; lookalikeDomainFlags = []; punycodeSenderFlags = [];
       urgencyScores = []; financialIndicatorsPerFile = []; domainCategoriesPerFile = [];
       FIELDS.forEach(function (f) { fieldIndex[f] = new Map(); });
       pathToFileId = new Map();
+      ocrCoveredFileIds = new Set();
       total = 0; indexedCount = 0; skippedCount = 0; cancelled = false;
     }
 
@@ -241,6 +274,27 @@
     }
 
     function cancel() { cancelled = true; }
+
+    /**
+     * Pushes a freshly-OCR'd attachment's text into the live index's 'ocr' field, so
+     * attachment.ocr: search picks it up immediately -- no re-indexing pass, no reload.
+     * Called from app.js's EV.onOcrTextReady hook, itself called from render.js right after
+     * EV.ocr.run(att) resolves (cache-hit or freshly-computed alike). A no-op if the path
+     * isn't currently indexed (e.g. the folder was closed/reopened since), same "just don't
+     * crash on stale state" posture as the rest of this file's epoch-guarded callbacks.
+     */
+    function addOcrText(path, text) {
+      var fileId = pathToFileId.get(path);
+      if (fileId === undefined || !text) return;
+      EV.tokenize(text).forEach(function (tok) { addPosting('ocr', tok, fileId); });
+      ocrCoveredFileIds.add(fileId);
+    }
+
+    /** How many currently-indexed emails have at least one OCR'd attachment -- feeds the
+     * "not exhaustive" coverage note next to attachment.ocr: search results. */
+    function ocrStats() {
+      return { coveredCount: ocrCoveredFileIds.size };
+    }
 
     // ---------- query parsing ----------
     //
@@ -296,7 +350,10 @@
     // generic paren-stopping plain-value fallback.
     var REGEX_SHAPED_VALUE_RE = /^\/(?:\\.|[^\/\\])*\/[a-z]*/i;
     var PLAIN_VALUE_RE = /^[^\s()]+/;
-    var FIELD_NAME_RE = /^\w+/;
+    // One optional dot-segment (e.g. "header.subject", "attachment.count") -- a dot isn't in \w,
+    // so this is strictly wider than the old /^\w+/, never narrower; nothing that parsed as a bare
+    // word before stops doing so now.
+    var FIELD_NAME_RE = /^[\w]+(?:\.[\w]+)?/;
 
     /**
      * Builds the leaf-clause object for a `field:value` match (or returns
@@ -306,7 +363,6 @@
      */
     function buildFieldClause(rawFieldRaw, valueRaw, negate, isQuoted) {
       var rawField = rawFieldRaw.toLowerCase();
-      var field = FIELD_ALIASES[rawField] || rawField;
       if (NUMERIC_FIELDS.hasOwnProperty(rawField)) {
         var spec = parseNumericValue(valueRaw, rawField);
         return {
@@ -314,7 +370,20 @@
           invalid: !spec, op: spec && spec.op, value: spec && spec.value
         };
       }
-      if (FIELDS.indexOf(field) !== -1 || field === 'tag') {
+      // attachment.ext / header.messageid are their own small clause types -- not tokenized text
+      // (an extension or a Message-ID is matched as a whole value, not word-by-word), so each gets
+      // resolved by its own branch in candidatesForClause rather than the generic token-index path.
+      if (rawField === 'attachment.ext') {
+        return { field: 'attachment.ext', extMatch: true, text: valueRaw.toLowerCase(), negate: negate };
+      }
+      if (rawField === 'attachment.sha256') {
+        return { field: 'attachment.sha256', sha256Match: true, text: valueRaw.trim().toLowerCase(), negate: negate };
+      }
+      if (rawField === 'header.messageid') {
+        return { field: 'header.messageid', exactMatch: true, text: valueRaw.trim().toLowerCase(), negate: negate };
+      }
+      var field = QUERY_FIELD_MAP.hasOwnProperty(rawField) ? QUERY_FIELD_MAP[rawField] : (rawField === 'tag' ? 'tag' : null);
+      if (field) {
         if (!isQuoted) {
           var regexMatch = REGEX_ELIGIBLE_FIELDS[field] && REGEX_VALUE_RE.exec(valueRaw);
           if (regexMatch) {
@@ -373,6 +442,14 @@
         var fieldMatch = FIELD_NAME_RE.exec(q.slice(i));
         if (fieldMatch && q[i + fieldMatch[0].length] === ':') {
           var afterColon = i + fieldMatch[0].length + 1;
+          // Tolerate whitespace right after the colon (e.g. "header.from: paypal") --
+          // otherwise the value-parsing below sees a leading space, matches nothing, and
+          // the whole "field:" span falls through to becoming its own literal (almost
+          // never-matching) bare word ANDed into the rest of the query -- silently
+          // zeroing out every result for a perfectly natural way to type a query, with
+          // no warning explaining why. The value still stops at the next whitespace/paren
+          // exactly as before -- this only skips space *before* the value starts.
+          while (/\s/.test(q[afterColon] || '')) afterColon++;
           var valStr = q.slice(afterColon);
           var valueText, consumedLen = 0, isQuoted = false;
           if (valStr[0] === '"') {
@@ -513,15 +590,20 @@
       return { ids: ids, warning: null };
     }
 
-    // subject/from/to/attachment are the only fields whose raw (untokenized) text is kept per
-    // file (body/meta aren't, to keep memory bounded at large folder sizes -- see file-top doc) --
-    // so a real regex, or verifying an exact-case match, can only ever run against these four.
-    var RAW_TEXT_FIELDS = ['subject', 'from', 'to', 'attachment'];
+    // subject/from/to/cc/bcc/replyto/returnpath/attachment are the only fields whose raw
+    // (untokenized) text is kept per file (body/meta aren't, to keep memory bounded at large
+    // folder sizes -- see file-top doc) -- so a real regex, or verifying an exact-case match,
+    // can only ever run against these.
+    var RAW_TEXT_FIELDS = ['subject', 'from', 'to', 'cc', 'bcc', 'replyto', 'returnpath', 'attachment'];
     function fieldRawText(field, fid) {
       switch (field) {
         case 'subject': return subjects[fid] || '';
         case 'from': return (fromAddrs[fid] || '') + ' ' + (fromNames[fid] || '');
         case 'to': return toStrs[fid] || '';
+        case 'cc': return ccStrs[fid] || '';
+        case 'bcc': return bccStrs[fid] || '';
+        case 'replyto': return replyToStrs[fid] || '';
+        case 'returnpath': return returnPathStrs[fid] || '';
         case 'attachment': return attNamesRaw[fid] || '';
         default: return null;
       }
@@ -536,7 +618,7 @@
         return { ids: [], warning: 'couldn’t parse the regex for "' + clause.field + ':" — ' + e.message };
       }
       if (RAW_TEXT_FIELDS.indexOf(clause.field) === -1) {
-        return { ids: [], warning: 'regex isn’t supported on "' + clause.field + ':" — try subject/from/to/attachment, or Raw search for anything else' };
+        return { ids: [], warning: 'regex isn’t supported on "' + clause.field + ':" — try header.subject/header.from/header.to/header.cc/header.bcc/header.replyto/header.returnpath/attachment.filename, or Raw search for anything else' };
       }
       var ids = allIndexedFileIds().filter(function (fid) { return re.test(fieldRawText(clause.field, fid)); });
       return { ids: ids, warning: null };
@@ -578,6 +660,25 @@
       opts = opts || {};
       if (clause.numeric) return candidatesForNumericClause(clause);
       if (clause.regex) return candidatesForRegexClause(clause);
+      if (clause.extMatch) {
+        if (!clause.text) return { ids: [], warning: '"attachment.ext:" needs a value, e.g. attachment.ext:.exe' };
+        var extIds = allIndexedFileIds().filter(function (fid) {
+          return (attExtsPerFile[fid] || []).indexOf(clause.text) !== -1;
+        });
+        return { ids: extIds, warning: null };
+      }
+      if (clause.sha256Match) {
+        if (!clause.text) return { ids: [], warning: '"attachment.sha256:" needs a value, e.g. attachment.sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' };
+        var shaIds = allIndexedFileIds().filter(function (fid) {
+          return (attSha256PerFile[fid] || []).indexOf(clause.text) !== -1;
+        });
+        return { ids: shaIds, warning: null };
+      }
+      if (clause.exactMatch) {
+        if (!clause.text) return { ids: [], warning: '"header.messageid:" needs a value' };
+        var midIds = allIndexedFileIds().filter(function (fid) { return messageIds[fid] === clause.text; });
+        return { ids: midIds, warning: null };
+      }
       var tokens = EV.tokenize(clause.text);
       if (tokens.length === 0) {
         return { ids: [], warning: '"' + clause.text + '" is too short to search on (minimum 2 characters) — matched nothing rather than everything' };
@@ -587,9 +688,9 @@
       var result = sets[0] || [];
       for (var i = 1; i < sets.length; i++) result = intersect(result, sets[i]);
       // The inverted index is case-folded, so exact-case verification (a quoted phrase, always;
-      // or ANY term while the "Match Case" toggle is on) can only be checked against the four
+      // or ANY term while the "Match Case" toggle is on) can only be checked against the
       // fields with retained raw text -- same scope regex is limited to, above.
-      var verifiableField = clause.field === 'subject' || clause.field === 'from' || clause.field === 'to' || clause.field === 'attachment' || clause.field === 'any';
+      var verifiableField = RAW_TEXT_FIELDS.indexOf(clause.field) !== -1 || clause.field === 'any';
       if (verifiableField && (clause.phrase || opts.caseSensitive)) {
         var needle = opts.caseSensitive ? clause.text : clause.text.toLowerCase();
         result = result.filter(function (fid) {
@@ -729,13 +830,19 @@
       var qtrim = queryString.trim();
       if (!qtrim) return Promise.resolve({ results: [], matchedFields: {}, warnings: [] });
 
+      // VSCode-style "files to include/exclude" — compiled once per call (not once per file), applied
+      // as a final filter over the resolved candidate id list, so it composes with every existing leaf/
+      // AND/OR/NOT/regex-mode combination without touching any of that logic.
+      var pathFilters = EV.compilePathFilters(opts.include, opts.exclude);
+      function byPathFilter(fid) { return EV.matchesPathFilters(paths[fid], pathFilters); }
+
       // The "Use Regular Expression" toggle bypasses the field:/phrase/tag query grammar entirely
       // -- the whole box is one pattern, exactly like Raw search's own regex mode, rather than
       // trying to make regex compose with the rest of the grammar.
       if (opts.isRegex) {
         var g = candidatesForGlobalRegex(qtrim, !!opts.caseSensitive);
         var gWarnings = g.warning ? [g.warning] : ['Regex mode searches subject/from/to/attachment — use Raw search to match the full body.'];
-        return Promise.resolve(buildSearchResult(g.ids, g.matchedFieldsById || {}, gWarnings, opts.limit || 500));
+        return Promise.resolve(buildSearchResult(g.ids.filter(byPathFilter), g.matchedFieldsById || {}, gWarnings, opts.limit || 500));
       }
 
       var tokens;
@@ -779,6 +886,7 @@
           ctx.warnings.push('search failed unexpectedly — matched nothing (' + (e && e.message ? e.message : e) + ')');
           candidates = [];
         }
+        candidates = candidates.filter(byPathFilter);
 
         return buildSearchResult(candidates, ctx.matchedFields, ctx.warnings, opts.limit || 500);
       });
@@ -794,10 +902,19 @@
       // ingestion pipeline. Not used by the app itself.
       ingestDocForTest: ingestDoc,
       resetForTest: reset,
+      addOcrText: addOcrText,
+      ocrStats: ocrStats,
       isRunning: function () { return running; },
       stats: function () { return { total: total, indexed: indexedCount, skipped: skippedCount }; },
       skippedFiles: function () { return skippedFileList.slice(); },
       fileIdForPath: function (path) { return pathToFileId.get(path); },
+      /** {subject, fromAddr} for one already-indexed path -- feeds the Rules panel's "View matches"
+       * list, which needs to render rows the same way Search results do without re-running a search. */
+      docSummaryForPath: function (path) {
+        var fid = pathToFileId.get(path);
+        if (fid === undefined) return null;
+        return { subject: subjects[fid] || '', fromAddr: fromAddrs[fid] || '' };
+      },
       emailIdForPath: function (path) {
         var fid = pathToFileId.get(path);
         return fid === undefined ? null : (emailIds[fid] || null);
@@ -820,9 +937,12 @@
        * one email at a time. Each count is "N emails referenced this value",
        * not "N times this value appeared" (a domain repeated 5x in one body
        * counts once for that email), which is the more useful number for
-       * "how many messages touch this domain".
+       * "how many messages touch this domain". An optional `pathSet` (a
+       * Set of paths) narrows this to just those emails — e.g. the caller's
+       * current search results or an explicit multi-selection — instead of
+       * always covering the whole folder.
        */
-      iocSummary: function () {
+      iocSummary: function (pathSet) {
         var senderDomains = new Map();
         var urlDomains = new Map();
         var attExts = new Map();
@@ -832,6 +952,7 @@
         function bump(map, key) { if (!key) return; map.set(key, (map.get(key) || 0) + 1); }
         for (var fid = 0; fid < paths.length; fid++) {
           if (paths[fid] === undefined) continue; // hole from in-progress indexing
+          if (pathSet && !pathSet.has(paths[fid])) continue;
           bump(senderDomains, fromDomains[fid]);
           (urlDomainsPerFile[fid] || []).forEach(function (d) { bump(urlDomains, d); });
           (attExtsPerFile[fid] || []).forEach(function (e) { bump(attExts, e); });

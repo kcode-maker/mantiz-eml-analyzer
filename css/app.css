@@ -153,6 +153,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .ev-tree-file-other { color: var(--fg-dim); }
 .ev-tag-dots { margin-left: 6px; display: inline-flex; gap: 2px; }
 .ev-tag-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.ev-open-marker-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin: 0 6px 0 2px; background: transparent; border: 2px solid #3fb950; box-sizing: content-box; flex-shrink: 0; vertical-align: middle; }
 
 /* ---------- tag filter ---------- */
 #ev-tag-filter-list { padding: 6px; overflow: auto; }
@@ -167,8 +168,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 /* ---------- search results ---------- */
 .ev-result-row { padding: 6px 8px; border-bottom: 1px solid var(--bg-2); cursor: pointer; overflow: hidden; }
 .ev-result-row:hover { background: var(--bg-2); }
-.ev-result-top { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ev-result-bottom { color: var(--fg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-result-line1 { display: flex; align-items: center; gap: 8px; }
+.ev-result-checkbox { flex-shrink: 0; cursor: pointer; }
+.ev-result-top { min-width: 0; flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-result-bottom { margin-top: 2px; padding-left: 22px; color: var(--fg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- tabs ---------- */
 #ev-tab-strip { display: flex; background: var(--bg-1); border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
@@ -271,6 +274,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .ev-attachment-hash { font-family: var(--mono); font-size: 10px; color: var(--fg-dim); }
 .ev-attachment-image-preview { max-width: 100%; max-height: 300px; border-radius: 4px; }
 .ev-attachment-text-preview { max-height: 260px; overflow: auto; background: var(--bg-0); padding: 8px; border-radius: 4px; font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+.ev-ocr-panel { margin-top: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.ev-ocr-status { font-size: 11px; color: var(--fg-dim); }
+.ev-ocr-text-output { max-height: 260px; overflow: auto; background: var(--bg-0); padding: 8px; border-radius: 4px; font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; width: 100%; box-sizing: border-box; }
 
 /* ---------- raw ---------- */
 .ev-raw-toolbar { margin-bottom: 8px; display: flex; gap: 8px; }
@@ -316,9 +322,19 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .ev-switch input:checked + .ev-switch-slider::before { transform: translateX(14px); background: #0b3d0b; }
 
 /* ---------- settings (right-pane page, like an IDE's Settings editor tab) ---------- */
-#ev-view-settings { display: none; flex: 1; flex-direction: column; overflow: auto; padding: 22px 28px 40px; max-width: 640px; }
-#ev-view-settings h2 { margin: 0 0 4px; }
-.ev-settings-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--fg-dim); padding: 18px 0 4px; }
+#ev-view-settings { display: none; flex: 1; flex-direction: column; min-height: 0; padding: 22px 28px 0; }
+#ev-view-settings h2 { margin: 0 0 12px; }
+#ev-settings-layout { display: flex; flex: 1; min-height: 0; gap: 28px; }
+#ev-settings-nav { width: 200px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
+.ev-settings-nav-item { text-align: left; background: transparent; border: none; color: var(--fg-dim); padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12.5px; }
+.ev-settings-nav-item:hover { background: var(--bg-2); color: var(--fg); }
+.ev-settings-nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+#ev-settings-detail { flex: 1; min-width: 0; overflow: auto; padding-bottom: 40px; }
+.ev-settings-section { max-width: 640px; }
+.ev-info-toggle { background: transparent; border: none; color: var(--fg-dim); cursor: pointer; font-size: 12px; padding: 0 0 0 6px; vertical-align: middle; }
+.ev-info-toggle:hover { color: var(--accent); }
+.ev-settings-section-title { display: flex; align-items: center; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--fg-dim); padding: 4px 0 4px; }
+.ev-settings-section-title:first-child { padding-top: 0; }
 #ev-trusted-domains-list { padding: 6px 0; display: flex; flex-wrap: wrap; }
 .ev-trusted-domain-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-3); border-radius: var(--radius-sm); padding: 3px 4px 3px 9px; margin: 0 6px 6px 0; font-size: 12px; }
 .ev-trusted-domain-chip button { background: none; border: none; color: var(--fg-dim); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }
@@ -344,6 +360,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .ev-context-menu-item.danger:hover:not(:disabled) { background: #ff7b72; color: #2a0a0a; }
 .ev-context-menu-icon { width: 16px; text-align: center; flex-shrink: 0; }
 .ev-context-menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+.ev-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 300; background: var(--bg-2); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow-md); padding: 8px 16px; font-size: 12.5px; color: var(--fg); }
+
+.ev-result-row.multi-selected { background: var(--accent-soft); outline: 1px dashed var(--accent); outline-offset: -1px; }
+
+#ev-search-select-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--bg-2); border-bottom: 1px solid var(--border); }
 
 .ev-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .ev-modal { background: var(--bg-1); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 22px; width: 560px; max-width: 92vw; max-height: 88vh; overflow: auto; box-shadow: var(--shadow-md); }

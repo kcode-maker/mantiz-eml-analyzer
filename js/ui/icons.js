@@ -17,7 +17,8 @@
     file: '<path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/>',
     trash: '<path d="M2.5 4.5h11" stroke-linecap="round"/><path d="M5.5 4.5v-1a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1"/><path d="M4 4.5l.7 8.5a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-8.5"/>',
     folderArrow: '<path d="M1.5 3.5a1 1 0 0 1 1-1h3.2l1.3 1.6h6.5a1 1 0 0 1 1 1v7.4a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-9z"/><path d="M6 9.5h4M8 7.5l2 2-2 2" stroke-linecap="round" stroke-linejoin="round"/>',
-    copy: '<rect x="5" y="5" width="9" height="9.5" rx="1"/><path d="M3 10.5V2.5a1 1 0 0 1 1-1h6"/>'
+    copy: '<rect x="5" y="5" width="9" height="9.5" rx="1"/><path d="M3 10.5V2.5a1 1 0 0 1 1-1h6"/>',
+    magnifier: '<circle cx="6.8" cy="6.8" r="4.3"/><path d="M10.1 10.1L14 14" stroke-linecap="round"/>'
   };
 
   /** Raw inline `<svg>` markup for `name` — set as innerHTML on a wrapper element (never as text). */

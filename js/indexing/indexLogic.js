@@ -16,6 +16,23 @@
 
   var MAX_INDEXABLE_BYTES = 15 * 1024 * 1024; // skip indexing pathologically large messages
 
+  // Deliberately NOT exported as EV.sha256Hex -- js/ui/render.js already exports its own copy of
+  // this under that exact name for the main-thread UI (attachment hash display, the bulk OCR
+  // action). This file runs inside a Worker too (importScripts'd by worker.js), where render.js is
+  // never loaded at all, so it needs its own copy regardless; keeping it unexported avoids the two
+  // files silently overwriting each other's EV.sha256Hex depending on script load order on the main
+  // thread, where both files DO share one window.EV.
+  async function sha256HexBytes(bytes) {
+    if (!g.crypto || !g.crypto.subtle || !bytes || !bytes.length) return null;
+    try {
+      var digest = await g.crypto.subtle.digest('SHA-256', bytes);
+      var arr = Array.from(new Uint8Array(digest));
+      return arr.map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Bounds the urgency/financial-indicator scans to a body-length-independent cost: a phishing
   // lure's urgency language and financial-indicator payload are always near the top of the message,
   // so scanning far more than this adds cost without adding signal, regardless of how large the
@@ -64,15 +81,16 @@
    * @param {string} path
    * @param {ArrayBuffer} buffer
    * @param {{trustedDomains?: string[], domainCategories?: Array<{name:string,keywords:string[]}>}} [opts]
-   * @returns {object} compact index document
+   * @returns {Promise<object>} compact index document
    */
-  EV.buildIndexDoc = function (fileId, path, buffer, opts) {
+  EV.buildIndexDoc = async function (fileId, path, buffer, opts) {
     opts = opts || {};
     if (buffer.byteLength > MAX_INDEXABLE_BYTES) {
       return {
         fileId: fileId, path: path, emailId: 'hash:toolarge:' + fileId, subject: '(too large to index: ' + Math.round(buffer.byteLength / 1e6) + ' MB)',
-        fromName: '', fromAddr: '', fromDomain: '', toStr: '', dateMs: null, size: buffer.byteLength, attCount: 0,
-        attNames: '', attExts: [], urlCount: 0, urlDomains: [], recipientCount: 0, fieldTokens: {}, skipped: true,
+        fromName: '', fromAddr: '', fromDomain: '', toStr: '', ccStr: '', bccStr: '', replyToStr: '', returnPathStr: '', messageId: null,
+        dateMs: null, size: buffer.byteLength, attCount: 0,
+        attNames: '', attExts: [], attSha256s: [], urlCount: 0, urlDomains: [], recipientCount: 0, fieldTokens: {}, skipped: true,
         nameMismatch: false, lookalikeDomain: false, punycodeSender: false, urgencyScore: 0, financialIndicators: [],
         domainCategories: []
       };
@@ -83,11 +101,27 @@
     var fromAddr = parsed.from[0] ? parsed.from[0].address : '';
     var fromName = parsed.from[0] ? parsed.from[0].name : '';
     var toStr = parsed.to.map(function (a) { return a.address; }).join(' ');
+    var ccStr = parsed.cc.map(function (a) { return a.address; }).join(' ');
+    var bccStr = parsed.bcc.map(function (a) { return a.address; }).join(' ');
+    var replyToStr = parsed.replyTo.map(function (a) { return a.address; }).join(' ');
+    // Return-Path isn't part of emlParser.js's core parsed shape (it's a raw envelope header, not an
+    // address-list field like to/cc/bcc/replyTo) -- same raw-header-lookup buildRuleFacts already uses.
+    var returnPathRaw = EV.getHeader(parsed.headers, 'return-path');
+    var returnPathAddr = returnPathRaw ? EV.parseAddressList(returnPathRaw)[0] : null;
+    var returnPathStr = returnPathAddr ? returnPathAddr.address : '';
     var attNames = parsed.attachments.map(function (a) { return a.filename; }).join(' ');
     var attExts = parsed.attachments.map(function (a) {
       var m = /\.[^.]+$/.exec(a.filename || '');
       return m ? m[0].toLowerCase() : '(none)';
     });
+    // Eager, not lazy-per-click like the Attachments-tab hash display: the attachment's raw bytes
+    // are already fully decoded in memory at this point (parseEml already did that), and
+    // crypto.subtle.digest is fast even for multi-MB buffers, so hashing here adds negligible cost
+    // to a pass that's already reading/decoding every byte of every attachment regardless -- unlike
+    // OCR (seconds per image, one shared engine instance), there's no scale reason to keep this one
+    // lazy/opportunistic. Nulls (crypto.subtle unavailable, e.g. a very old/oddball environment) are
+    // filtered out rather than left in the array, so a search never has to special-case them.
+    var attSha256s = (await Promise.all(parsed.attachments.map(function (a) { return sha256HexBytes(a.bytes); }))).filter(Boolean);
     var headerBlob = parsed.headers.map(function (h) { return h.value; }).join(' ');
     var uniqueRecipientAddrs = {};
     parsed.to.concat(parsed.cc, parsed.bcc).forEach(function (a) {
@@ -110,6 +144,10 @@
       subject: EV.tokenize(parsed.subject),
       from: EV.tokenize(fromAddr + ' ' + fromName),
       to: EV.tokenize(toStr),
+      cc: EV.tokenize(ccStr),
+      bcc: EV.tokenize(bccStr),
+      replyto: EV.tokenize(replyToStr),
+      returnpath: EV.tokenize(returnPathStr),
       body: EV.tokenize(bodyText),
       url: EV.tokenize(urls.join(' ')),
       attachment: EV.tokenize(attNames),
@@ -125,11 +163,17 @@
       fromAddr: fromAddr,
       fromDomain: domainOf(fromAddr) || '',
       toStr: toStr,
+      ccStr: ccStr,
+      bccStr: bccStr,
+      replyToStr: replyToStr,
+      returnPathStr: returnPathStr,
+      messageId: parsed.messageId,
       dateMs: parsed.date ? parsed.date.getTime() : null,
       size: buffer.byteLength,
       attCount: parsed.attachments.length,
       attNames: attNames,
       attExts: attExts,
+      attSha256s: attSha256s,
       urlCount: urls.length,
       urlDomains: urlDomainsValue,
       recipientCount: recipientCount,
@@ -514,13 +558,20 @@
   EV.DEFAULT_DOMAIN_CATEGORIES = DEFAULT_DOMAIN_CATEGORIES;
 
   /** True if `domain` matches a category keyword: a keyword starting with "." is a TLD/suffix check
-   * (domain literally ends with it); anything else is a plain case-insensitive substring check — the
-   * same simple contract a user typing keywords into the Settings page would expect. */
+   * (domain literally ends with it); a keyword that itself looks like a real domain (contains a ".")
+   * matches only that exact domain or one of its subdomains -- an unanchored substring check here would
+   * false-positive constantly (e.g. a keyword "t.co" would "match" microsoft.com/target.com/walmart.com,
+   * since they all happen to contain the four characters "t.co" right before their own ".com" -- this
+   * was a real, shipped bug, not a hypothetical one). A keyword with no "." at all (a bare word, e.g. a
+   * brand name a user might add) keeps the original plain substring check, which is reasonable and
+   * intentional there. */
   function matchesCategoryKeyword(domain, keyword) {
     if (!domain || !keyword) return false;
     domain = String(domain).toLowerCase();
     keyword = String(keyword).toLowerCase();
-    return keyword.charAt(0) === '.' ? domain.slice(-keyword.length) === keyword : domain.indexOf(keyword) !== -1;
+    if (keyword.charAt(0) === '.') return domain.slice(-keyword.length) === keyword;
+    if (keyword.indexOf('.') !== -1) return domain === keyword || domain.slice(-(keyword.length + 1)) === '.' + keyword;
+    return domain.indexOf(keyword) !== -1;
   }
   EV.ruleHelpers.matchesCategoryKeyword = matchesCategoryKeyword;
 

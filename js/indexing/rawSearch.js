@@ -24,7 +24,12 @@
       epoch++;
       var myEpoch = epoch;
       running = true;
-      var allFiles = EV.flattenFileNodes(workspace.root).filter(function (n) { return EV.isEmlFile(n.name); });
+      // VSCode-style "files to include/exclude" -- compiled once per call, applied here so an excluded
+      // file is never even dispatched to the worker pool, not just hidden from results afterward.
+      var pathFilters = EV.compilePathFilters(opts.include, opts.exclude);
+      var allFiles = EV.flattenFileNodes(workspace.root).filter(function (n) {
+        return EV.isEmlFile(n.name) && EV.matchesPathFilters(n.path, pathFilters);
+      });
       var fileEntries = allFiles.map(function (n, i) { return { fileId: i, entry: n.entry }; });
 
       return EV.runOverFileEntries(pool, fileEntries, {

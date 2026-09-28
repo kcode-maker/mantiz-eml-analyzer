@@ -108,6 +108,38 @@ step(function () {
   });
 });
 
+// removeTagEverywhere: strips a tag from every record that has it, regardless of provenance
+// (manual on one email, rule-applied on another), leaving other tags on those same records intact,
+// and doesn't touch an unrelated tag/record at all.
+step(function () {
+  __store = {};
+  // Sequential, not Promise.all -- two of these touch the SAME record (mid:5), and addTag's own
+  // read-modify-write (rawGet -> mutate -> putOrPrune) isn't safe to race against itself.
+  return EV.tags.addTag('mid:5', 'sweep-me', { type: 'manual' })
+    .then(function () { return EV.tags.addTag('mid:5', 'keep-me', { type: 'manual' }); })
+    .then(function () { return EV.tags.addTag('mid:6', 'sweep-me', { type: 'rule', ruleId: 'r5' }); })
+    .then(function () { return EV.tags.addTag('mid:7', 'unrelated', { type: 'manual' }); });
+});
+step(function () { return EV.tags.removeTagEverywhere('sweep-me'); });
+step(function (count) {
+  assert(count === 2, 'removeTagEverywhere reports how many emails it touched (' + count + ')');
+  return EV.tags.get('mid:5').then(function (rec) {
+    assert(rec && rec.tags.length === 1 && rec.tags[0] === 'keep-me',
+      'removeTagEverywhere strips the swept tag but leaves another manual tag on the same email (' + JSON.stringify(rec && rec.tags) + ')');
+  });
+});
+step(function () {
+  return EV.tags.get('mid:6').then(function (rec) {
+    assert(!rec, 'removeTagEverywhere strips a rule-owned instance too, pruning the now-empty record (' + JSON.stringify(rec) + ')');
+  });
+});
+step(function () {
+  return EV.tags.get('mid:7').then(function (rec) {
+    assert(rec && rec.tags.length === 1 && rec.tags[0] === 'unrelated',
+      'removeTagEverywhere never touches a record that never had the swept tag (' + JSON.stringify(rec && rec.tags) + ')');
+  });
+});
+
 step(function () {
   print('---');
   print('PASS: ' + pass + '  FAIL: ' + fail);

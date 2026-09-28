@@ -74,6 +74,24 @@
       return null;
     }
   }
+  // Exported so app.js's bulk "Extract OCR (selected)" action can hash an attachment it
+  // never renders a card for, using the exact same hashing this tab's own Attachments-tab
+  // hash display/OCR cache already relies on -- one implementation, not a second copy.
+  EV.sha256Hex = sha256Hex;
+
+  /** The same "first meaningful image" rule renderAttachments uses for its OCR button:
+   * an image, under the 8MB preview cap, over a tiny-tracking-pixel size floor -- inline or
+   * regular attachment alike (see the comment at the OCR-button call site below for why).
+   * Exported so app.js's bulk OCR action picks the exact same attachment a per-email click
+   * would have, instead of drifting from it as a second, separately-maintained rule. */
+  function pickFirstMeaningfulImageAttachment(attachments) {
+    for (var i = 0; i < (attachments || []).length; i++) {
+      var att = attachments[i];
+      if (/^image\//.test(att.mimeType) && att.size < 8 * 1024 * 1024 && att.size > 512) return att;
+    }
+    return null;
+  }
+  EV.pickFirstMeaningfulImageAttachment = pickFirstMeaningfulImageAttachment;
 
   // ---------- security signals ----------
 
@@ -150,7 +168,7 @@
     var table = el('div', 'ev-links-table');
     links.forEach(function (l) {
       var row = el('div', 'ev-link-row' + (l.mismatch ? ' mismatch' : ''));
-      var textCell = el('div', 'ev-link-text', l.text || '(image or empty link)');
+      var textCell = el('div', 'ev-link-text', l.text || '(empty link text)'); // sanitize.js always fills l.text now; kept only as a last-resort safety net
       var hrefCell = el('div', 'ev-link-href', l.href);
       hrefCell.title = l.href;
       var btn = copyBtn(function () { return l.href; }, 'Copy URL');
@@ -615,6 +633,57 @@
     host.appendChild(pre);
   }
 
+  /** The OCR button/status/output panel for one image attachment -- same interaction pattern as
+   * the WHOIS button (disable-while-running, inline status text, never silently blank). Caches the
+   * result on the attachment object (att._ocrPromise), mirroring att._sha256Promise above, so
+   * re-visiting this sub-tab doesn't lose an in-flight or completed result. */
+  function renderOcrPanel(att, path) {
+    var wrap = el('div', 'ev-ocr-panel');
+    var btn = el('button', 'ev-btn ev-ocr-btn', '🔎 Extract text (OCR)');
+    btn.title = 'Runs local OCR on this image — no network call, nothing executed, pixel analysis only. Runs once and caches the result.';
+    var statusEl = el('span', 'ev-ocr-status');
+    var textHost = el('pre', 'ev-ocr-text-output');
+    textHost.style.display = 'none';
+    wrap.appendChild(btn);
+    wrap.appendChild(statusEl);
+    wrap.appendChild(textHost);
+
+    function showResult(text) {
+      textHost.textContent = text && text.trim() ? text : '(no text detected)';
+      textHost.style.display = 'block';
+      statusEl.textContent = '';
+    }
+
+    if (att._ocrText !== undefined) {
+      btn.textContent = 'Re-run OCR';
+      showResult(att._ocrText);
+    }
+
+    btn.onclick = function () {
+      if (!window.EV.ocr || !window.EV.ocr.isSupported()) {
+        statusEl.textContent = 'OCR isn’t available in this browser.';
+        return;
+      }
+      btn.disabled = true;
+      statusEl.textContent = 'Running OCR… (first use this session may take a few seconds to load the engine)';
+      att._ocrPromise = window.EV.ocr.run(att);
+      att._ocrPromise.then(function (text) {
+        btn.disabled = false;
+        btn.textContent = 'Re-run OCR';
+        att._ocrText = text;
+        showResult(text);
+        // Extends this text's search coverage to the current session's index immediately --
+        // covers both a cache-hit (an already-OCR'd attachment from an earlier session) and a
+        // freshly-computed result alike, since EV.ocr.run() checks the IndexedDB cache internally.
+        if (path && window.EV.onOcrTextReady) window.EV.onOcrTextReady(path, text);
+      }).catch(function (err) {
+        btn.disabled = false;
+        statusEl.textContent = 'OCR failed: ' + (err && err.message || 'unknown error');
+      });
+    };
+    return wrap;
+  }
+
   function renderAttachments(tab, container) {
     container.innerHTML = '';
     var p = tab.parsed;
@@ -622,6 +691,7 @@
       container.appendChild(el('div', 'ev-muted', 'No attachments in this message.'));
       return;
     }
+    var firstMeaningfulImage = pickFirstMeaningfulImageAttachment(p.attachments);
     p.attachments.forEach(function (att, idx) {
       var card = el('div', 'ev-attachment-card');
       var head = el('div', 'ev-attachment-head');
@@ -670,6 +740,13 @@
         img.className = 'ev-attachment-image-preview';
         img.src = att._previewBlobUrl;
         card.appendChild(img);
+        // "First image" = first one over a tiny-tracking-pixel size floor, inline or attached
+        // alike -- inline (cid:) images are often exactly where a real phishing screenshot lives
+        // (e.g. an entire fake login page embedded as one image), not just tracking pixels/logos,
+        // so the inline flag alone was never the right signal to skip on.
+        if (att === firstMeaningfulImage) {
+          card.appendChild(renderOcrPanel(att, tab.path));
+        }
       } else if (/^text\/(plain|csv)$/.test(att.mimeType) || /\.(txt|csv|log|json)$/i.test(att.filename)) {
         renderTextAttachmentPreview(att, card);
       } else if (att.mimeType === 'text/html' || /\.html?$/i.test(att.filename)) {

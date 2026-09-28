@@ -120,6 +120,20 @@
     },
     setDemoState: function (patch) {
       return put('demo', patch);
+    },
+
+    /** Max number of email tabs kept open at once before the least-recently-viewed one is evicted
+     * to make room for a new one (see js/ui/tabs.js). User-configurable 1-100, default 10. */
+    maxOpenTabs: function () {
+      return rawGet('ideConfig').then(function (rec) {
+        return (rec && Number.isInteger(rec.maxOpenTabs)) ? rec.maxOpenTabs : 10;
+      });
+    },
+    setMaxOpenTabs: function (n) {
+      n = Math.round(Number(n));
+      if (!Number.isFinite(n)) n = 10; // e.g. NaN/undefined input, not a valid 0
+      n = Math.max(1, Math.min(100, n));
+      return put('ideConfig', { maxOpenTabs: n }).then(function () { return n; });
     }
   };
 })(typeof self !== 'undefined' ? self : this);

@@ -102,7 +102,7 @@
         if (type === 'indexBatch') {
           try {
             var buf = await f.blob.arrayBuffer();
-            list.push(EV.buildIndexDoc(f.fileId, f.path, buf, opts));
+            list.push(await EV.buildIndexDoc(f.fileId, f.path, buf, opts));
           } catch (err) {
             list.push({ fileId: f.fileId, path: f.path, subject: '(failed to parse)', fromName: '', fromAddr: '',
               toStr: '', dateMs: null, size: f.blob.size || 0, attNames: '', urlCount: 0, fieldTokens: {}, skipped: true, error: String(err) });

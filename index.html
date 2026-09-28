@@ -42,6 +42,7 @@
       <div id="ev-view-explorer" class="ev-sidebar-view active">
         <div id="ev-tree-root-label" title="Browsers never reveal the full OS path of a picked folder — this is the folder's own name, as a tree root.">No folder open</div>
         <div id="ev-tree-toolbar">
+          <button id="ev-btn-refresh-explorer" class="ev-tree-tool-btn" title="Refresh — re-reads this folder from disk to pick up files added/removed/renamed outside this app (Chrome/Edge, folder opened via Open Folder only)">⟳</button>
           <button id="ev-btn-collapse-all" class="ev-tree-tool-btn" title="Collapse All">⊟</button>
           <button id="ev-btn-expand-all" class="ev-tree-tool-btn" title="Expand All">⊞</button>
           <select id="ev-tree-sort" title="Sort">
@@ -77,7 +78,7 @@
             <button id="ev-btn-search-help" class="ev-mini-btn" title="Search syntax reference">?</button>
           </div>
           <div class="ev-search-panel-row">
-            <input id="ev-search-input" type="text" placeholder='e.g. from:paypal "verify your account" attachments:>3'>
+            <input id="ev-search-input" type="text" placeholder='e.g. header.from:paypal "verify your account" attachment.count:>3'>
           </div>
           <div class="ev-search-panel-row">
             <button id="ev-btn-search" class="ev-btn ev-btn-primary">Search</button>
@@ -88,6 +89,15 @@
             <button type="button" id="ev-search-regex" class="ev-search-toggle-btn" title="Use Regular Expression">.*</button>
             <span id="ev-search-options-hint" class="ev-muted-small"></span>
           </div>
+          <details id="ev-search-path-filters" class="ev-collapsible">
+            <summary>Files to include/exclude</summary>
+            <div class="ev-search-panel-row">
+              <input id="ev-search-include" type="text" placeholder="files to include — e.g. invoices/*, *.msg (blank = all)">
+            </div>
+            <div class="ev-search-panel-row">
+              <input id="ev-search-exclude" type="text" placeholder="files to exclude — e.g. spam/*, *.tmp">
+            </div>
+          </details>
           <div class="ev-search-panel-row">
             <button id="ev-btn-export-iocs" class="ev-mini-btn" title="Export sender domains, URL/link domains, and attachment extensions across every currently-indexed email in this folder as one CSV — for a blocklist or incident report.">⬇ Export IOCs (CSV)</button>
           </div>
@@ -96,6 +106,11 @@
         <div id="ev-search-status-row">
           <span id="ev-search-status" class="ev-muted-small"></span>
           <button id="ev-btn-clear-search" class="ev-mini-btn" title="Clear search results" style="display:none">✕ Clear</button>
+        </div>
+        <div id="ev-search-select-bar" style="display:none">
+          <input type="checkbox" id="ev-search-select-all-checkbox" title="Select all / none">
+          <span id="ev-search-select-count" class="ev-muted-small"></span>
+          <button id="ev-btn-clear-search-select" class="ev-mini-btn" style="display:none">Clear selection</button>
         </div>
         <div id="ev-search-results" class="ev-scroll-area"></div>
       </div>
@@ -137,24 +152,53 @@
       <div id="ev-subtab-nav"></div>
       <div id="ev-loading" style="display:none"></div>
       <div id="ev-content" class="ev-scroll-area"></div>
-      <div id="ev-view-settings" class="ev-scroll-area">
+      <div id="ev-view-settings">
         <h2>Settings</h2>
+        <div id="ev-settings-layout">
+          <nav id="ev-settings-nav">
+            <button type="button" class="ev-settings-nav-item active" data-settings-section="ide">IDE Config</button>
+            <button type="button" class="ev-settings-nav-item" data-settings-section="trusted">Trusted Domains</button>
+            <button type="button" class="ev-settings-nav-item" data-settings-section="categories">Domain Categories</button>
+          </nav>
+          <div id="ev-settings-detail" class="ev-scroll-area">
 
-        <div class="ev-settings-section-title">Trusted domains</div>
-        <p class="ev-muted-small">Used by the sender-spoofing rule templates (display-name/brand mismatch, lookalike-domain check). Add your own organization's domain(s) so impersonation of your own company is caught too, not just public brands. A domain here also covers its subdomains (adding <code>mycompany.com</code> trusts <code>mail.mycompany.com</code> too). For more control, add a regex instead — one per line, written as <code>/pattern/flags</code>, e.g. <code>/\.corp\.mycompany\.com$/</code>.</p>
-        <div id="ev-trusted-domains-list"></div>
-        <textarea id="ev-trusted-domain-input" rows="3" placeholder="mycompany.com, mycompany.net&#10;/\.corp\.mycompany\.com$/"></textarea>
-        <div class="ev-settings-row">
-          <button id="ev-btn-add-trusted-domain" class="ev-mini-btn">+ Add</button>
-          <button id="ev-btn-reset-trusted-domains" class="ev-mini-btn">Reset to defaults</button>
-        </div>
+            <section id="ev-settings-section-ide" class="ev-settings-section">
+              <div class="ev-settings-section-title">IDE Config<button type="button" class="ev-info-toggle" title="What is this?">ⓘ</button></div>
+              <p class="ev-muted-small ev-info-body" style="display:none">General editor behavior for this workspace.</p>
+              <div class="ev-settings-row">
+                <label for="ev-max-open-tabs">Max open tabs</label>
+                <input id="ev-max-open-tabs" type="number" min="1" max="100" step="1" style="width:70px;">
+                <button type="button" class="ev-info-toggle" title="What is this?">ⓘ</button>
+                <span class="ev-muted-small ev-info-body" style="display:none">1–100, default 10. Once you're over the limit, the tab you viewed longest ago closes first to make room for a new one — not simply the first one you opened.</span>
+              </div>
+              <div class="ev-settings-row">
+                <label>Server port</label>
+                <span id="ev-server-port-value" class="ev-muted-small"></span>
+              </div>
+            </section>
 
-        <div class="ev-settings-section-title">Domain categories</div>
-        <p class="ev-muted-small">"What type of domain is this?" — checked against the sender/reply-to/return-path domains, every URL domain in the body, and domain-like text in headers and attachment filenames. Ships with a small starter set; add your own keywords to any category, or create new ones — everything here stays in this browser, never in the app's own source. A keyword starting with <code>.</code> matches the domain's ending (a TLD/suffix, e.g. <code>.xyz</code>); anything else matches as a plain substring anywhere in the domain.</p>
-        <div id="ev-domain-categories-list"></div>
-        <div class="ev-settings-row">
-          <button id="ev-btn-add-domain-category" class="ev-mini-btn">+ New category</button>
-          <button id="ev-btn-reset-domain-categories" class="ev-mini-btn">Reset to defaults</button>
+            <section id="ev-settings-section-trusted" class="ev-settings-section" style="display:none">
+              <div class="ev-settings-section-title">Trusted Domains<button type="button" class="ev-info-toggle" title="What is this?">ⓘ</button></div>
+              <p class="ev-muted-small ev-info-body" style="display:none">Used by the sender-spoofing rule templates (display-name/brand mismatch, lookalike-domain check). Add your own organization's domain(s) so impersonation of your own company is caught too, not just public brands. A domain here also covers its subdomains (adding <code>mycompany.com</code> trusts <code>mail.mycompany.com</code> too). For more control, add a regex instead — one per line, written as <code>/pattern/flags</code>, e.g. <code>/\.corp\.mycompany\.com$/</code>.</p>
+              <div id="ev-trusted-domains-list"></div>
+              <textarea id="ev-trusted-domain-input" rows="3" placeholder="mycompany.com, mycompany.net&#10;/\.corp\.mycompany\.com$/"></textarea>
+              <div class="ev-settings-row">
+                <button id="ev-btn-add-trusted-domain" class="ev-mini-btn">+ Add</button>
+                <button id="ev-btn-reset-trusted-domains" class="ev-mini-btn">Reset to defaults</button>
+              </div>
+            </section>
+
+            <section id="ev-settings-section-categories" class="ev-settings-section" style="display:none">
+              <div class="ev-settings-section-title">Domain Categories<button type="button" class="ev-info-toggle" title="What is this?">ⓘ</button></div>
+              <p class="ev-muted-small ev-info-body" style="display:none">"What type of domain is this?" — checked against the sender/reply-to/return-path domains, every URL domain in the body, and domain-like text in headers and attachment filenames. Ships with a small starter set; add your own keywords to any category, or create new ones — everything here stays in this browser, never in the app's own source. A keyword starting with <code>.</code> matches the domain's ending (a TLD/suffix, e.g. <code>.xyz</code>); anything else matches as a plain substring anywhere in the domain.</p>
+              <div id="ev-domain-categories-list"></div>
+              <div class="ev-settings-row">
+                <button id="ev-btn-add-domain-category" class="ev-mini-btn">+ New category</button>
+                <button id="ev-btn-reset-domain-categories" class="ev-mini-btn">Reset to defaults</button>
+              </div>
+            </section>
+
+          </div>
         </div>
       </div>
       <div id="ev-empty-state">
@@ -214,6 +258,8 @@
     <span id="ev-status-index"></span>
     <div id="ev-status-progress" style="display:none"><div id="ev-status-progress-bar"></div></div>
     <button id="ev-btn-stop-indexing" class="ev-statusbar-stop-btn" style="display:none">Stop</button>
+    <span id="ev-status-ocr" style="display:none"></span>
+    <button id="ev-btn-stop-ocr" class="ev-statusbar-stop-btn" style="display:none">Stop</button>
     <span id="ev-status-selected"></span>
     <span id="ev-status-mode"></span>
   </div>
@@ -230,6 +276,7 @@
 <script src="js/parsing/sanitize.js"></script>
 <script src="js/core/tags.js"></script>
 <script src="js/core/settings.js"></script>
+<script src="js/core/ocrCache.js"></script>
 <script src="js/core/whois.js"></script>
 <script src="js/rules/rulesStore.js"></script>
 <script src="js/rules/ruleTemplates.js"></script>
@@ -239,9 +286,13 @@
 <script src="js/ui/tabs.js"></script>
 <script src="js/ui/render.js"></script>
 <script src="js/indexing/workerClient.js"></script>
+<script src="js/indexing/pathFilter.js"></script>
 <script src="js/indexing/searchIndex.js"></script>
 <script src="js/indexing/rawSearch.js"></script>
 <script src="js/rules/rulesEngine.js"></script>
+<!-- The only ES module in this app -- native browser feature, no bundler. See ocrBridge.js's own
+     top comment and vendor/VENDOR.md for why tesseract-wasm specifically needs this loading style. -->
+<script type="module" src="js/core/ocrBridge.js"></script>
 <script src="js/ui/app.js"></script>
 </body>
 </html>

@@ -19,6 +19,9 @@ Thumbs.db
 .server.pid
 /downloads/
 
+# Local server-port preference for scripts/serve.py -- machine-specific, not shipped.
+.mantiz-config.json
+
 # Generated double-click desktop launchers (scripts/serve.py --make-launchers) --
 # bake in this machine's own absolute path, so they'd be wrong for anyone else's clone.
 /launchers/

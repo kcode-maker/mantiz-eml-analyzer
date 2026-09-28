@@ -10,5 +10,6 @@
   "08-duplicate-campaign/mass-phishing-copy-2.eml",
   "09-calendar-invite/quarterly-planning-sync-invite.eml",
   "10-boolean-search-senders/paypal-payment-receipt.eml",
-  "10-boolean-search-senders/amazon-order-shipped.eml"
+  "10-boolean-search-senders/amazon-order-shipped.eml",
+  "11-image-only-lure/shared-document-notification.eml"
 ]

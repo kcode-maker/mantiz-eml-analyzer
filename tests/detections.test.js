@@ -135,6 +135,21 @@ assert(h.matchesCategoryKeyword('xyz-corp.com', '.xyz') === false, 'matchesCateg
 assert(h.matchesCategoryKeyword('', 'bit.ly') === false, 'matchesCategoryKeyword: empty domain -> false, no throw');
 assert(h.matchesCategoryKeyword('example.com', '') === false, 'matchesCategoryKeyword: empty keyword -> false, no throw');
 
+// Regression for a real shipped bug: a domain-shaped keyword (contains a ".") must be anchored
+// (exact domain or a real subdomain of it), not a raw substring match -- "t.co" as a plain substring
+// check "matched" microsoft.com/target.com/walmart.com/etc, since they all happen to contain the four
+// characters "t.co" right before their own ".com". A bare (no ".") keyword keeps substring semantics.
+assert(h.matchesCategoryKeyword('microsoft.com', 't.co') === false, 'matchesCategoryKeyword: domain-shaped keyword "t.co" no longer false-positives on microsoft.com');
+assert(h.matchesCategoryKeyword('target.com', 't.co') === false, 'matchesCategoryKeyword: domain-shaped keyword "t.co" no longer false-positives on target.com');
+assert(h.matchesCategoryKeyword('walmart.com', 't.co') === false, 'matchesCategoryKeyword: domain-shaped keyword "t.co" no longer false-positives on walmart.com');
+assert(h.matchesCategoryKeyword('t.co', 't.co') === true, 'matchesCategoryKeyword: exact domain-shaped keyword still matches itself');
+assert(h.matchesCategoryKeyword('sub.t.co', 't.co') === true, 'matchesCategoryKeyword: domain-shaped keyword still matches a real subdomain');
+assert(h.matchesCategoryKeyword('mailbox.com', 'box.com') === false, 'matchesCategoryKeyword: domain-shaped keyword "box.com" no longer false-positives on mailbox.com');
+assert(h.matchesCategoryKeyword('inbox.com', 'box.com') === false, 'matchesCategoryKeyword: domain-shaped keyword "box.com" no longer false-positives on inbox.com');
+assert(h.matchesCategoryKeyword('box.com', 'box.com') === true, 'matchesCategoryKeyword: exact domain-shaped keyword "box.com" still matches itself');
+assert(h.matchesCategoryKeyword('files.box.com', 'box.com') === true, 'matchesCategoryKeyword: domain-shaped keyword "box.com" still matches a real subdomain');
+assert(h.matchesCategoryKeyword('myinvoice.com', 'invoice') === true, 'matchesCategoryKeyword: a bare (no ".") keyword keeps plain substring matching');
+
 // ---- domainCategoriesFor ----
 (function () {
   var categories = [

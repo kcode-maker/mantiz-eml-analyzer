@@ -8,14 +8,37 @@
   'use strict';
   var EV = g.EV || (g.EV = {});
 
+  // A folder full of interesting emails invites opening far more tabs than anyone actually keeps
+  // track of -- past this many, the least-recently-viewed tab is evicted to make room for the new
+  // one (recently (re)selecting a tab keeps it "fresh", so it isn't the first to go just because it
+  // was opened early on -- an LRU queue, not a strict open-order FIFO). Nothing about a tag/note is
+  // lost when a tab closes this way -- those are saved to IndexedDB as you go, not held in tab state.
+  var DEFAULT_MAX_TABS = 10;
+
+  function clampMaxTabs(n) {
+    n = Math.round(Number(n));
+    if (!Number.isFinite(n)) n = DEFAULT_MAX_TABS; // e.g. NaN/undefined input, not a valid 0
+    return Math.max(1, Math.min(100, n));
+  }
+
   EV.createTabManager = function (stripEl, opts) {
     opts = opts || {};
     var tabs = [];
     var activeId = null;
     var seq = 0;
+    var activationSeq = 0;
+    var maxTabs = clampMaxTabs(opts.maxTabs);
 
     function byPath(path) {
       return tabs.filter(function (t) { return t.path === path; })[0];
+    }
+
+    function evictLeastRecentlyViewed() {
+      var oldest = tabs[0];
+      for (var i = 1; i < tabs.length; i++) {
+        if (tabs[i].lastActivated < oldest.lastActivated) oldest = tabs[i];
+      }
+      close(oldest.id);
     }
 
     function open(fileEntry) {
@@ -24,6 +47,7 @@
         activate(existing.id);
         return existing;
       }
+      while (tabs.length >= maxTabs) evictLeastRecentlyViewed();
       var tab = {
         id: ++seq,
         path: fileEntry.path,
@@ -35,7 +59,8 @@
         activeSubTab: 'preview',
         allowRemote: false,
         blobUrls: [],
-        scrollPositions: {}
+        scrollPositions: {},
+        lastActivated: 0
       };
       tabs.push(tab);
       activate(tab.id);
@@ -44,10 +69,17 @@
     }
 
     function activate(id) {
-      if (!tabs.some(function (t) { return t.id === id; })) return;
+      var tab = getById(id);
+      if (!tab) return;
       activeId = id;
+      tab.lastActivated = ++activationSeq;
       renderStrip();
       if (opts.onActivate) opts.onActivate(getActive());
+    }
+
+    function setMaxTabs(n) {
+      maxTabs = clampMaxTabs(n);
+      while (tabs.length > maxTabs) evictLeastRecentlyViewed();
     }
 
     function revoke(tab) {
@@ -160,6 +192,8 @@
       getById: getById,
       list: function () { return tabs.slice(); },
       renderStrip: renderStrip,
+      setMaxTabs: setMaxTabs,
+      getMaxTabs: function () { return maxTabs; },
       next: function () {
         if (tabs.length < 2) return;
         var idx = tabs.findIndex(function (t) { return t.id === activeId; });

@@ -9,7 +9,7 @@
 
   // Bump alongside CHANGELOG.md when shipping a notable batch of changes —
   // there's no build step/package.json to derive this from automatically.
-  EV.VERSION = '1.1.0';
+  EV.VERSION = '1.2.0';
 
   function fmtBytesShort(n) {
     if (n == null) return '?';
@@ -21,21 +21,24 @@
   var els = {};
   ['ev-btn-open-folder', 'ev-btn-open-files', 'ev-btn-resume', 'ev-search-options-row', 'ev-search-mode',
     'ev-search-input', 'ev-search-regex', 'ev-search-case', 'ev-search-options-hint',
+    'ev-search-include', 'ev-search-exclude',
+    'ev-search-select-bar', 'ev-search-select-all-checkbox', 'ev-search-select-count', 'ev-btn-clear-search-select',
     'ev-btn-search', 'ev-btn-search-cancel', 'ev-btn-search-help', 'ev-search-help', 'ev-btn-export-iocs', 'ev-btn-export-tags', 'ev-btn-import-tags', 'ev-import-tags-input', 'ev-btn-export-report', 'ev-version-marker',
     'ev-btn-save-tags-sidecar', 'ev-tags-sidecar-banner', 'ev-tags-sidecar-text', 'ev-btn-load-tags-sidecar', 'ev-btn-dismiss-tags-sidecar',
     'ev-resume-banner', 'ev-demo-banner', 'ev-btn-load-demo', 'ev-demo-always-show', 'ev-btn-dismiss-demo',
-    'ev-sidebar', 'ev-tree-root-label', 'ev-btn-collapse-all', 'ev-btn-expand-all',
+    'ev-sidebar', 'ev-tree-root-label', 'ev-btn-refresh-explorer', 'ev-btn-collapse-all', 'ev-btn-expand-all',
     'ev-tree-sort', 'ev-file-filter-mode', 'ev-tree-filter', 'ev-tree-container', 'ev-search-status', 'ev-btn-clear-search',
     'ev-parse-errors', 'ev-parse-errors-count', 'ev-parse-errors-list',
     'ev-bulk-tag-bar', 'ev-bulk-tag-count', 'ev-bulk-tag-input', 'ev-btn-bulk-tag-apply', 'ev-btn-bulk-tag-clear',
     'ev-search-results', 'ev-tag-filter-list', 'ev-splitter', 'ev-right-pane', 'ev-tab-strip',
     'ev-path-bar', 'ev-subtab-nav', 'ev-loading', 'ev-content', 'ev-empty-state', 'ev-status-files', 'ev-status-index',
-    'ev-status-progress', 'ev-status-progress-bar', 'ev-status-selected', 'ev-status-mode', 'ev-main',
+    'ev-status-progress', 'ev-status-progress-bar', 'ev-status-ocr', 'ev-btn-stop-ocr', 'ev-status-selected', 'ev-status-mode', 'ev-main',
     'ev-btn-new-rule', 'ev-btn-run-all-rules', 'ev-btn-stop-rules', 'ev-btn-stop-indexing', 'ev-rules-status', 'ev-rules-list',
     'ev-btn-export-rules', 'ev-btn-import-rules', 'ev-import-rules-input',
     'ev-rule-modal-overlay', 'ev-rule-modal-title', 'ev-rule-name', 'ev-rule-tag', 'ev-rule-expression',
     'ev-rule-help-toggle', 'ev-rule-help', 'ev-rule-template-select', 'ev-rule-enabled', 'ev-btn-test-rule',
     'ev-rule-test-result', 'ev-rule-error', 'ev-btn-cancel-rule', 'ev-btn-save-rule',
+    'ev-max-open-tabs', 'ev-server-port-value',
     'ev-trusted-domains-list', 'ev-trusted-domain-input', 'ev-btn-add-trusted-domain', 'ev-btn-reset-trusted-domains',
     'ev-domain-categories-list', 'ev-btn-add-domain-category', 'ev-btn-reset-domain-categories',
     'ev-btn-settings', 'ev-view-settings'
@@ -57,7 +60,10 @@
     selectedPath: null,
     indexStart: 0,
     multiSelectedPaths: new Set(),
-    lastClickedPath: null
+    lastClickedPath: null,
+    searchSelectedPaths: new Set(),
+    lastClickedSearchPath: null,
+    openTabPaths: new Set() // every path currently open as a tab in the right pane, not just the active one
   };
 
   els.version_marker.textContent = 'v' + EV.VERSION;
@@ -160,6 +166,17 @@
       if (state.multiSelectedPaths.has(node.path)) rowEl.classList.add('multi-selected');
       var ficon = EV.iconEl(isEml ? 'mail' : 'file', 'ev-tree-icon');
       rowEl.appendChild(ficon);
+      // Deliberately placed right after the icon (its own slot), not mixed in with the tag-dots
+      // cluster after the filename -- a ring, not a filled circle, so it can never be confused with
+      // a tag's filled color dot even when a tag's hash-assigned color happens to also be green
+      // (TAG_COLORS in tags.js includes an olive-green, #98c379, which otherwise looks identical at
+      // a glance to a plain filled green dot).
+      if (isEml && state.openTabPaths.has(node.path)) {
+        var openDot = document.createElement('span');
+        openDot.className = 'ev-open-marker-dot';
+        openDot.title = 'Open in a tab right now';
+        rowEl.appendChild(openDot);
+      }
       rowEl.appendChild(document.createTextNode(node.name));
       var tags = state.tagDotCache.get(node.path);
       if (tags && tags.length) {
@@ -169,7 +186,7 @@
           var d = document.createElement('span');
           d.className = 'ev-tag-dot';
           d.style.background = EV.tagColor(t);
-          d.title = t;
+          d.title = 'Tag: ' + t;
           dots.appendChild(d);
         });
         rowEl.appendChild(dots);
@@ -227,6 +244,7 @@
     rebuildVisibleRows();
   });
 
+  els.btn_refresh_explorer.addEventListener('click', refreshExplorerFromDisk);
   els.btn_collapse_all.addEventListener('click', function () {
     if (!state.workspace) return;
     EV.setAllExpanded(state.workspace.root, false);
@@ -321,12 +339,89 @@
     return e;
   }
 
+  function basename(path) {
+    var parts = String(path).split('/');
+    return parts[parts.length - 1];
+  }
+
+  // showContextMenu closes the menu before running a clicked item's onClick, so there's no surviving
+  // menu surface left to show a "Copied!" confirmation on (unlike copyBtn in render.js, which mutates
+  // its own still-visible button text) -- this is the minimal new primitive that's actually needed.
+  var activeToast = null;
+  function showToast(message) {
+    if (activeToast) { clearTimeout(activeToast._timer); activeToast.remove(); }
+    var toast = el('div', 'ev-toast', message);
+    document.body.appendChild(toast);
+    activeToast = toast;
+    toast._timer = setTimeout(function () {
+      toast.remove();
+      if (activeToast === toast) activeToast = null;
+    }, 1500);
+  }
+
+  function copyToClipboard(text, successMsg) {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) { showToast('Clipboard not available in this browser.'); return; }
+    navigator.clipboard.writeText(text).then(function () {
+      showToast(successMsg);
+    }).catch(function () {
+      showToast('Copy failed — clipboard access was blocked.');
+    });
+  }
+
   function pathsToEntries(paths) {
     return paths.map(function (p) { return state.pathToEntry.get(p); }).filter(Boolean);
   }
 
   function reloadWorkspaceFromHandle() {
     return EV.resumeFromDirHandle(state.workspace.dirHandle).then(function (ws) { setWorkspace(ws); });
+  }
+
+  /**
+   * VS Code-style Explorer "Refresh" — re-reads the open folder from disk to pick up files
+   * added/removed/renamed by something other than this app (Finder, another tool, a sync client),
+   * since browsers have no live filesystem-watch API to do this automatically. Deliberately does
+   * NOT reuse setWorkspace() (which the Delete/Move/Copy reload path does use) -- that closes every
+   * open tab and resets the tree/tag filters, which is right after a destructive file op but would
+   * be a surprising side effect of what's meant to be a lightweight "just refresh the listing"
+   * action, same expectation VS Code's own Explorer refresh sets (it never closes open editors
+   * either). Only closes tabs whose file no longer exists in the fresh listing; an already-open tab
+   * for a file that changed on disk keeps showing what it last read -- this app has no filesystem-
+   * watcher to detect that kind of staleness, in-app or out, so it's no different from reopening the
+   * same tab today. Only meaningful for a folder opened via the native directory picker (mode
+   * 'fsAccess') -- the webkitdirectory/drag-and-drop/flat-file-list/sample-emails fallbacks only
+   * ever hand over inert File snapshots with nothing on disk to re-read from.
+   */
+  function refreshExplorerFromDisk() {
+    if (!state.workspace) return;
+    if (!(state.workspace.mode === 'fsAccess' && state.workspace.dirHandle)) {
+      showToast('Refresh isn’t available for this folder — use Open Folder again to pick up changes.');
+      return;
+    }
+    if (els.btn_refresh_explorer.disabled) return;
+    els.btn_refresh_explorer.disabled = true;
+    EV.resumeFromDirHandle(state.workspace.dirHandle).then(function (ws) {
+      state.workspace = ws;
+      if (state.sortDirection !== 'asc') EV.sortTree(ws.root, state.sortDirection);
+      state.pathToEntry = new Map();
+      EV.flattenFileNodes(ws.root).forEach(function (n) { state.pathToEntry.set(n.path, n.entry); });
+      tabMgr.list().forEach(function (t) {
+        if (!state.pathToEntry.has(t.path)) tabMgr.close(t.id);
+      });
+      clearSearchResults(); // the previous result set no longer matches the rebuilt index
+      state.multiSelectedPaths.clear();
+      updateBulkTagBar();
+      rebuildVisibleRows();
+      updateFilesStatus();
+      updateTagsSidecarButtonState();
+      checkForTagsSidecar(ws);
+      saveSession();
+      startIndexing();
+      showToast('Explorer refreshed.');
+    }).catch(function (err) {
+      alert('Refresh failed: ' + (err && err.message || err));
+    }).then(function () {
+      els.btn_refresh_explorer.disabled = false;
+    });
   }
 
   function reportFileOpResult(verb, result) {
@@ -411,11 +506,96 @@
     input.focus();
   }
 
+  var ocrBatchCancelled = false;
+  var ocrBatchActive = false;
+  function showOcrBatchStopButton(show) { els.btn_stop_ocr.style.display = show ? 'inline-block' : 'none'; }
+  els.btn_stop_ocr.addEventListener('click', function () { ocrBatchCancelled = true; });
+
+  /**
+   * Bulk "Extract OCR (selected)" -- runs OCR on the first meaningful image attachment of each
+   * selected email, one at a time (OCR is inherently serial: one page-session-scoped OCRClient,
+   * see ocrBridge.js), pushing extracted text straight into the live search index exactly like a
+   * single per-email OCR click does (window.EV.onOcrTextReady). Skips anything already cached
+   * (EV.ocr.run checks the SHA-256 cache itself), so re-running this over an overlapping selection
+   * only processes what's new. Deliberately scoped to whatever the user selected -- never "the
+   * whole folder" at once -- this app is meant to scale to very large folders, and OCR runs
+   * through one shared, sequential engine instance, so an unscoped whole-folder run could take hours.
+   */
+  function extractOcrForPaths(paths) {
+    if (!window.EV.ocr || !window.EV.ocr.isSupported()) {
+      alert('OCR isn’t available in this browser (createImageBitmap is missing).');
+      return;
+    }
+    if (ocrBatchActive) {
+      showToast('An OCR batch is already running — stop it first.');
+      return;
+    }
+    ocrBatchCancelled = false;
+    ocrBatchActive = true;
+    showOcrBatchStopButton(true);
+    els.status_ocr.style.display = 'inline-block';
+    var total = paths.length, done = 0, ocrd = 0, noImage = 0, failed = 0;
+    els.status_ocr.textContent = 'Extracting OCR… 0/' + total;
+
+    function next(idx) {
+      if (ocrBatchCancelled || idx >= paths.length) {
+        ocrBatchActive = false;
+        showOcrBatchStopButton(false);
+        els.status_ocr.textContent = (ocrBatchCancelled ? 'OCR batch stopped — ' : 'OCR batch done — ') +
+          ocrd.toLocaleString() + ' extracted' +
+          (noImage ? ', ' + noImage.toLocaleString() + ' had no eligible image' : '') +
+          (failed ? ', ' + failed.toLocaleString() + ' failed' : '') +
+          ' (' + done.toLocaleString() + '/' + total.toLocaleString() + ' checked).';
+        setTimeout(function () { if (!ocrBatchActive) els.status_ocr.style.display = 'none'; }, 8000);
+        return Promise.resolve();
+      }
+      var path = paths[idx];
+      var entry = state.pathToEntry.get(path);
+      if (!entry) { noImage++; done++; return next(idx + 1); }
+      return entry.getBytes().then(function (buf) {
+        var parsed;
+        try { parsed = EV.parseEml(buf); } catch (e) { parsed = null; }
+        var att = parsed ? EV.pickFirstMeaningfulImageAttachment(parsed.attachments) : null;
+        if (!att) { noImage++; done++; els.status_ocr.textContent = 'Extracting OCR… ' + done + '/' + total; return next(idx + 1); }
+        if (!att._sha256Promise) att._sha256Promise = EV.sha256Hex(att.bytes);
+        return window.EV.ocr.run(att).then(function (text) {
+          ocrd++; done++;
+          searchIdx.addOcrText(path, text);
+          els.status_ocr.textContent = 'Extracting OCR… ' + done + '/' + total;
+          return next(idx + 1);
+        });
+      }).catch(function () {
+        failed++; done++;
+        els.status_ocr.textContent = 'Extracting OCR… ' + done + '/' + total;
+        return next(idx + 1);
+      });
+    }
+    return next(0);
+  }
+
   /** Builds the right-click menu for one or more selected email paths. Shared by the tree, and (later) Tags/Rules bulk actions. */
   function showFileActionMenu(x, y, paths) {
     var writable = EV.hasWriteCapableWorkspace(state.workspace);
     var label = paths.length === 1 ? '1 email' : paths.length + ' emails';
+    var ocrAvailable = !!(window.EV.ocr && window.EV.ocr.isSupported());
     showContextMenu(x, y, [
+      {
+        label: 'Copy path' + (paths.length === 1 ? '' : 's'), icon: EV.iconSvg('copy'),
+        onClick: function () { copyToClipboard(paths.join('\n'), 'Copied ' + label + ' path(s).'); }
+      },
+      {
+        label: 'Copy file name' + (paths.length === 1 ? '' : 's'), icon: EV.iconSvg('file'),
+        onClick: function () { copyToClipboard(paths.map(basename).join('\n'), 'Copied ' + label + ' file name(s).'); }
+      },
+      { separator: true },
+      {
+        label: 'Extract OCR (' + label + ')', icon: EV.iconSvg('magnifier'), disabled: !ocrAvailable,
+        title: ocrAvailable
+          ? 'Runs local OCR on each email’s first meaningful image (skips ones already cached) and makes the text searchable via attachment.ocr: — no network call, nothing executed, runs one email at a time.'
+          : 'OCR isn’t available in this browser (createImageBitmap is missing).',
+        onClick: function () { extractOcrForPaths(paths); }
+      },
+      { separator: true },
       {
         label: 'Delete ' + label + ' (to .deleted)', icon: EV.iconSvg('trash'), danger: true, disabled: !writable,
         title: writable ? 'Moves to a hidden .deleted folder — reversible, never shown by this app again.' : WRITE_UNAVAILABLE_TITLE,
@@ -437,11 +617,17 @@
 
   // ---------- tabs / right pane ----------
 
+  function refreshOpenTabIndicators() {
+    state.openTabPaths = new Set(tabMgr.list().map(function (t) { return t.path; }));
+    treeList.refresh();
+  }
+
   var tabMgr = EV.createTabManager(els.tab_strip, {
     onActivate: onTabActivate,
-    onChange: saveSession,
+    onChange: function () { saveSession(); refreshOpenTabIndicators(); },
     getTagsForPath: function (path) { return state.tagDotCache.get(path); }
   });
+  EV.settings.maxOpenTabs().then(function (n) { tabMgr.setMaxTabs(n); });
 
   function openTab(entry) {
     tabMgr.open(entry);
@@ -506,6 +692,14 @@
       tabMgr.renderStrip();
     });
     renderTagFilterList();
+  };
+
+  // Called from render.js right after EV.ocr.run(att) resolves (cache-hit or freshly-
+  // computed alike) -- pushes the extracted text into the LIVE search index immediately,
+  // no re-indexing pass needed. Deliberately does not re-run the current search itself;
+  // attachment.ocr: only ever reflects what's been indexed as of when a search is run.
+  window.EV.onOcrTextReady = function (path, text) {
+    searchIdx.addOcrText(path, text);
   };
 
   // ---------- folder opening ----------
@@ -625,6 +819,13 @@
   });
 
   function setWorkspace(ws) {
+    // The Resume button is only ever meaningful in the "nothing open yet" moment right after a
+    // fresh page load (see tryResumeSession, below) -- it's a one-time snapshot of whatever was
+    // saved at boot, never re-rendered afterward. Without this, opening a DIFFERENT folder here
+    // (Open Folder, drag-and-drop, the sample-emails demo -- anything other than clicking Resume
+    // itself) correctly updates the underlying saved session (saveSession(), below) but leaves the
+    // visible button frozen on stale text forever, since nothing else ever hides or refreshes it.
+    els.btn_resume.style.display = 'none';
     if (tabMgr) tabMgr.closeAll();
     clearSearchResults();
     state.multiSelectedPaths.clear();
@@ -750,6 +951,17 @@
         label.appendChild(dot);
         var nameSpan = el('span', 'ev-tag-filter-name', name);
         label.appendChild(nameSpan);
+        var viewBtn = document.createElement('button');
+        viewBtn.type = 'button';
+        viewBtn.className = 'ev-mini-btn ev-tag-menu-btn';
+        viewBtn.textContent = 'View files';
+        viewBtn.title = 'List every email carrying this tag in the Search tab — select some/all, then copy paths/names or move/copy them to a folder.';
+        viewBtn.onclick = function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          showTagMatches(name);
+        };
+        label.appendChild(viewBtn);
         var menuBtn = document.createElement('button');
         menuBtn.type = 'button';
         menuBtn.className = 'ev-mini-btn ev-tag-menu-btn';
@@ -764,6 +976,21 @@
           });
         };
         label.appendChild(menuBtn);
+        var deleteTagBtn = document.createElement('button');
+        deleteTagBtn.type = 'button';
+        deleteTagBtn.className = 'ev-mini-btn ev-tag-menu-btn danger';
+        deleteTagBtn.textContent = 'Delete tag';
+        deleteTagBtn.title = 'Untag this everywhere — removes this tag from every email that carries it (the emails themselves are untouched).';
+        deleteTagBtn.onclick = function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!confirm('Remove the tag "' + name + '" from every email that carries it?\n\nThe emails themselves are not touched or deleted — only this tag. If a still-enabled rule currently applies this tag, its next run will simply re-add it; disable or delete that rule too if you want it gone for good.')) return;
+          EV.tags.removeTagEverywhere(name).then(function (count) {
+            showToast('Removed "' + name + '" from ' + count.toLocaleString() + ' email(s).');
+            window.EV.onTagsChanged();
+          });
+        };
+        label.appendChild(deleteTagBtn);
         els.tag_filter_list.appendChild(label);
       });
     });
@@ -923,7 +1150,55 @@
     });
   });
 
+  els.max_open_tabs.addEventListener('change', function () {
+    EV.settings.setMaxOpenTabs(els.max_open_tabs.value).then(function (n) {
+      els.max_open_tabs.value = n;
+      tabMgr.setMaxTabs(n);
+    });
+  });
+
+  /** scripts/serve.py has already started and bound to a port by the time this page loads in the
+   * browser -- nothing running here can reach back and change that, so this is read-only, detected
+   * straight from the page's own URL, with a pointer to the one file that actually controls it. */
+  function renderServerPortValue() {
+    if (location.protocol === 'file:') {
+      els.server_port_value.textContent = 'N/A — opened via file://, not scripts/serve.py.';
+      return;
+    }
+    var port = location.port || (location.protocol === 'https:' ? '443' : '80');
+    els.server_port_value.textContent = 'Running on port ' + port + ' — edit .mantiz-config.json in the repo root (e.g. {"port": 9000}) and restart the server to change this.';
+  }
+
+  // VS Code-style two-pane Settings: a left category nav + a right detail pane that fills the rest
+  // of the available width (previously the whole page was capped at 640px, wasting most of the
+  // right pane on wide windows). Only one category's <section> is visible at a time.
+  document.querySelectorAll('.ev-settings-nav-item').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var target = btn.dataset.settingsSection;
+      document.querySelectorAll('.ev-settings-nav-item').forEach(function (b) { b.classList.toggle('active', b === btn); });
+      document.querySelectorAll('.ev-settings-section').forEach(function (s) {
+        s.style.display = (s.id === 'ev-settings-section-' + target) ? '' : 'none';
+      });
+    });
+  });
+
+  // Each long explanatory paragraph starts collapsed behind a small "ⓘ" toggle instead of always
+  // taking up space — click to show/hide, same idea as VS Code's per-setting description toggle.
+  document.querySelectorAll('.ev-info-toggle').forEach(function (btn) {
+    // The description is either the button's own next sibling (a settings row: label/input/ⓘ/body
+    // all as siblings) or the next sibling of the button's parent (a section title: the ⓘ sits
+    // inside the title's own <div>, so the description paragraph after it is one level up).
+    var next = btn.nextElementSibling;
+    var body = (next && next.classList.contains('ev-info-body')) ? next : btn.parentElement.nextElementSibling;
+    if (!body) return;
+    btn.addEventListener('click', function () {
+      body.style.display = (body.style.display === 'none') ? '' : 'none';
+    });
+  });
+
   function renderSettingsView() {
+    EV.settings.maxOpenTabs().then(function (n) { els.max_open_tabs.value = n; });
+    renderServerPortValue();
     renderTrustedDomainsList();
     renderDomainCategoriesList();
   }
@@ -1080,6 +1355,10 @@
         delBtn.className = 'danger';
         delBtn.textContent = 'Delete';
         delBtn.onclick = function () { deleteRule(rule); };
+        var viewBtn = document.createElement('button');
+        viewBtn.textContent = 'View matches';
+        viewBtn.title = 'List every email this rule has matched in the Search tab — select some/all, then copy paths/names or move/copy them to a folder.';
+        viewBtn.onclick = function () { showRuleMatches(rule); };
         var menuBtn = document.createElement('button');
         menuBtn.textContent = '⋯';
         menuBtn.title = 'Move, copy, or delete every email this rule has matched';
@@ -1092,6 +1371,7 @@
         actions.appendChild(runBtn);
         actions.appendChild(editBtn);
         actions.appendChild(delBtn);
+        actions.appendChild(viewBtn);
         actions.appendChild(menuBtn);
         card.appendChild(actions);
 
@@ -1107,6 +1387,38 @@
       var paths = [];
       emailIds.forEach(function (eid) { (byId.get(eid) || []).forEach(function (p) { paths.push(p); }); });
       return paths;
+    });
+  }
+
+  /** Lists an arbitrary set of paths (a rule's matches, a tag's members, ...) in the Search tab's own
+   * results list — same multi-select, right-click, "Select all"/"Clear selection" bar, and Copy
+   * path(s)/name(s)/Move/Copy-to-folder actions Search already has, so clustering-then-moving works
+   * identically no matter how the cluster was found (rule, tag, or a text search). */
+  function showPathsInSearchResults(paths, snippetLabel, statusLabel) {
+    clearSearchResults();
+    currentResults = paths.map(function (p) {
+      var doc = searchIdx.docSummaryForPath(p) || {};
+      return { path: p, subject: doc.subject || p, fromAddr: doc.fromAddr || '', snippet: snippetLabel };
+    });
+    searchResultsList.setItems(currentResults);
+    updateSearchSelectionBar();
+    els.search_status.textContent = statusLabel;
+    showSidebarView('search');
+  }
+
+  function showRuleMatches(rule) {
+    resolvePathsForRule(rule).then(function (paths) {
+      if (!paths.length) { alert('This rule has no recorded matches yet — run it first.'); return; }
+      showPathsInSearchResults(paths, 'matched by rule "' + rule.name + '"',
+        paths.length.toLocaleString() + ' email(s) matched by rule "' + rule.name + '"');
+    });
+  }
+
+  function showTagMatches(tagName) {
+    resolvePathsForTag(tagName).then(function (paths) {
+      if (!paths.length) { alert('No indexed emails currently carry this tag.'); return; }
+      showPathsInSearchResults(paths, 'tagged "' + tagName + '"',
+        paths.length.toLocaleString() + ' email(s) tagged "' + tagName + '"');
     });
   }
 
@@ -1379,40 +1691,46 @@
     var isRegex = isToggleActive(els.search_regex);
     if (raw || (!caseSensitive && !isRegex)) { els.search_options_hint.textContent = ''; return; }
     els.search_options_hint.textContent = isRegex
-      ? 'Regex mode matches subject/from/to/attachment only — use Raw search to regex the body.'
-      : 'Case-sensitive verifies subject/from/to/attachment only — body/header matches are unaffected.';
+      ? 'Regex mode matches header.subject/from/to/cc/bcc/replyto/returnpath/attachment.filename only — use Raw search to regex the body.'
+      : 'Case-sensitive verifies header.subject/from/to/cc/bcc/replyto/returnpath/attachment.filename only — header.raw/body matches are unaffected.';
   }
 
   els.search_mode.addEventListener('change', function () {
     var raw = els.search_mode.value === 'raw';
     els.search_input.placeholder = raw
       ? 'Grep the raw bytes of every file…  e.g. X-Mailer or a base64 fragment'
-      : 'Search all emails…  e.g. from:paypal "verify your account" attachments:>3';
+      : 'Search all emails…  e.g. header.from:paypal "verify your account" attachment.count:>3';
     updateSearchOptionsHint();
   });
 
   var SEARCH_HELP_HTML =
     '<table>' +
-    '<tr><td>from: to: subject:</td><td>substring match on that field, e.g. <code>from:paypal</code></td></tr>' +
-    '<tr><td>attachment:</td><td>substring match on attachment filenames</td></tr>' +
-    '<tr><td>meta: (or header:)</td><td>substring match across all header values</td></tr>' +
+    '<tr><td>header.subject: header.from: header.to:</td><td>substring match on that header, e.g. <code>header.from:paypal</code></td></tr>' +
+    '<tr><td>header.cc: header.bcc: header.replyto: header.returnpath:</td><td>substring match on that address header (bare addresses only, no display name — match the full address for these, e.g. <code>header.cc:carol@example.com</code>)</td></tr>' +
+    '<tr><td>header.messageid:</td><td>exact match on the Message-ID header</td></tr>' +
+    '<tr><td>header.raw:</td><td>substring match across all header values</td></tr>' +
+    '<tr><td>attachment.filename:</td><td>substring match on attachment filenames</td></tr>' +
+    '<tr><td>attachment.ext:</td><td>exact match on an attachment\'s extension, e.g. <code>attachment.ext:.exe</code> (include the dot)</td></tr>' +
+    '<tr><td>attachment.sha256:</td><td>exact match on an attachment\'s own SHA-256 hash (case-insensitive) — computed for every attachment during indexing, so this covers the whole folder immediately, unlike <code>attachment.ocr:</code></td></tr>' +
+    '<tr><td>attachment.ocr:</td><td>substring match on OCR\'d image-attachment text — <b>sparse, not exhaustive</b>: only covers emails where you\'ve already clicked "Extract text (OCR)" in the Attachments tab, never run automatically. See the OCR coverage count near the search results.</td></tr>' +
     '<tr><td>tag:</td><td>exact match on a tag name, e.g. <code>tag:phish</code></td></tr>' +
-    '<tr><td>"exact phrase"</td><td>quoted phrase (verified exactly for subject/from/to)</td></tr>' +
+    '<tr><td>"exact phrase"</td><td>quoted phrase (verified exactly for subject/from/to/cc/bcc/reply-to/return-path)</td></tr>' +
     '<tr><td>-term</td><td>exclude a word; also works on any field:, e.g. <code>-tag:reviewed</code></td></tr>' +
-    '<tr><td>OR / ( )</td><td>OR (all-caps only) binds looser than the implicit AND, and parentheses group: <code>(from:paypal OR from:ebay) attachments:&gt;0</code> · <code>-(from:paypal OR from:ebay)</code> negates a whole group. Lowercase <code>or</code> is just a word.</td></tr>' +
+    '<tr><td>OR / ( )</td><td>OR (all-caps only) binds looser than the implicit AND, and parentheses group: <code>(header.from:paypal OR header.from:ebay) attachment.count:&gt;0</code> · <code>-(header.from:paypal OR header.from:ebay)</code> negates a whole group. Lowercase <code>or</code> is just a word.</td></tr>' +
     '<tr><td colspan="2" style="padding-top:6px;color:var(--fg-dim)">Numeric fields — glue a comparison operator directly onto the value, no space:</td></tr>' +
-    '<tr><td>attachments:</td><td><code>attachments:3</code> (exact) · <code>attachments:&gt;3</code> · <code>attachments:&gt;=3</code> · <code>attachments:&lt;2</code></td></tr>' +
+    '<tr><td>attachment.count:</td><td><code>attachment.count:3</code> (exact) · <code>attachment.count:&gt;3</code> · <code>attachment.count:&gt;=3</code> · <code>attachment.count:&lt;2</code></td></tr>' +
     '<tr><td>size:</td><td><code>size:&gt;5mb</code> · <code>size:&lt;100kb</code> (accepts b / kb / mb / gb)</td></tr>' +
     '<tr><td>urls:</td><td>number of links found in the body, e.g. <code>urls:&gt;=10</code></td></tr>' +
     '<tr><td>recipients:</td><td>unique To/Cc/Bcc count, e.g. <code>recipients:&gt;20</code></td></tr>' +
     '<tr><td>duplicates:</td><td>how many indexed files share this one\'s Message-ID/content id, e.g. <code>duplicates:&gt;1</code> finds every file that\'s part of a repeated/bulk-sent batch</td></tr>' +
-    '<tr><td colspan="2" style="padding-top:6px;color:var(--fg-dim)">Regex — on subject/from/to/attachment only (not meta/body — use Raw search for those):</td></tr>' +
-    '<tr><td>field:/…/</td><td><code>attachment:/\\.(exe|scr)$/i</code> · <code>subject:/^re:.*invoice/i</code></td></tr>' +
+    '<tr><td>urgency:</td><td>the always-on urgency-language score, e.g. <code>urgency:&gt;=3</code></td></tr>' +
+    '<tr><td colspan="2" style="padding-top:6px;color:var(--fg-dim)">Regex — on header.subject/from/to/cc/bcc/replyto/returnpath/attachment.filename only (not header.raw/body — use Raw search for those):</td></tr>' +
+    '<tr><td>field:/…/</td><td><code>attachment.filename:/\\.(exe|scr)$/i</code> · <code>header.subject:/^re:.*invoice/i</code></td></tr>' +
     '<tr><td colspan="2" style="padding-top:6px;color:var(--fg-dim)"><b>Aa</b> / <b>.*</b> toggle buttons below Search:</td></tr>' +
-    '<tr><td><b>Aa</b> Match Case</td><td>verifies exact case for quoted phrases and any term, but only against subject/from/to/attachment (the fields with retained raw text) — body/header matches are unaffected</td></tr>' +
-    '<tr><td><b>.*</b> Use Regex</td><td>treats the whole search box as one regex pattern against subject/from/to/attachment, ignoring field:/phrase/tag syntax — same one-pattern model as Raw search\'s own regex toggle, so use Raw search to regex the body</td></tr>' +
+    '<tr><td><b>Aa</b> Match Case</td><td>verifies exact case for quoted phrases and any term, but only against the fields with retained raw text (header.subject/from/to/cc/bcc/replyto/returnpath/attachment.filename) — header.raw/body matches are unaffected</td></tr>' +
+    '<tr><td><b>.*</b> Use Regex</td><td>treats the whole search box as one regex pattern against those same raw-text fields, ignoring field:/phrase/tag syntax — same one-pattern model as Raw search\'s own regex toggle, so use Raw search to regex the body</td></tr>' +
     '</table>' +
-    '<div class="ev-muted-small" style="margin-top:6px">Combine freely: <code>from:paypal attachments:&gt;3 -tag:reviewed</code>. ' +
+    '<div class="ev-muted-small" style="margin-top:6px">Combine freely: <code>header.from:paypal attachment.count:&gt;3 -tag:reviewed</code>. ' +
     'A term or field value that’s too short/unparseable matches nothing rather than everything, and a note explains why.</div>';
 
   els.btn_search_help.addEventListener('click', function () {
@@ -1428,29 +1746,107 @@
   var searchResultsList = EV.createVirtualList(els.search_results, { rowHeight: 46, renderRow: renderSearchResultRow });
   var currentResults = [];
 
+  function toggleSearchRowSelected(path) {
+    if (state.searchSelectedPaths.has(path)) state.searchSelectedPaths.delete(path);
+    else state.searchSelectedPaths.add(path);
+    state.lastClickedSearchPath = path;
+    updateSearchSelectionBar();
+    searchResultsList.setItems(currentResults.slice());
+  }
+
   function renderSearchResultRow(item, rowEl) {
     if (!item) return;
-    rowEl.className = 'ev-result-row';
+    rowEl.className = 'ev-result-row' + (state.searchSelectedPaths.has(item.path) ? ' multi-selected' : '');
+    // Gmail-style checkbox -- the explicit, discoverable way to build up a selection one row (or a
+    // few) at a time, alongside the Explorer-style Shift/Ctrl-click range/toggle-select below for
+    // anyone who prefers that. Never opens the tab itself (stopPropagation). Checkbox + subject sit
+    // on their own top line; path/snippet is a second, full-width line below -- two clearly separate
+    // lines per row rather than the checkbox looking like it floats beside a two-line text block.
+    var line1 = document.createElement('div');
+    line1.className = 'ev-result-line1';
+    var checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'ev-result-checkbox';
+    checkbox.checked = state.searchSelectedPaths.has(item.path);
+    checkbox.onclick = function (e) { e.stopPropagation(); };
+    checkbox.onchange = function () { toggleSearchRowSelected(item.path); };
+    line1.appendChild(checkbox);
     var top = document.createElement('div');
     top.className = 'ev-result-top';
     top.textContent = item.subject || item.path;
+    line1.appendChild(top);
+    rowEl.appendChild(line1);
     var bottom = document.createElement('div');
     bottom.className = 'ev-result-bottom';
     bottom.textContent = item.path + (item.snippet ? '  —  ' + item.snippet : (item.fromAddr ? '  —  ' + item.fromAddr : ''));
-    rowEl.appendChild(top);
     rowEl.appendChild(bottom);
     rowEl.title = item.path;
-    rowEl.onclick = function () {
+    // Shift/Ctrl-click multi-select, mirroring the Explorer tree's own pattern exactly (see
+    // renderTreeRow) -- a SEPARATE selection Set from the tree's, since Search and Explorer are
+    // different lists with independent scrolling/visibility (sharing one Set would show stale
+    // highlights and misdrive the tree-only bulk-tag bar).
+    rowEl.onclick = function (e) {
+      var allPaths = currentResults.map(function (r) { return r.path; });
+      if (e.shiftKey && state.lastClickedSearchPath) {
+        var a = allPaths.indexOf(state.lastClickedSearchPath), b = allPaths.indexOf(item.path);
+        if (a !== -1 && b !== -1) {
+          var lo = Math.min(a, b), hi = Math.max(a, b);
+          for (var i = lo; i <= hi; i++) state.searchSelectedPaths.add(allPaths[i]);
+          updateSearchSelectionBar();
+          searchResultsList.setItems(currentResults.slice());
+          return;
+        }
+      }
+      if (e.metaKey || e.ctrlKey) {
+        toggleSearchRowSelected(item.path);
+        return;
+      }
+      if (state.searchSelectedPaths.size) { state.searchSelectedPaths.clear(); updateSearchSelectionBar(); }
+      state.lastClickedSearchPath = item.path;
       var entry = state.pathToEntry.get(item.path);
       if (entry) openTab(entry);
     };
+    rowEl.oncontextmenu = function (e) {
+      e.preventDefault();
+      var targetPaths = (state.searchSelectedPaths.has(item.path) && state.searchSelectedPaths.size > 1)
+        ? Array.from(state.searchSelectedPaths) : [item.path];
+      showFileActionMenu(e.clientX, e.clientY, targetPaths);
+    };
   }
+
+  /** Shows/hides the Gmail-style select-all bar below the search-status row and keeps the master
+   * checkbox (checked/indeterminate/unchecked) and count text in sync with the current selection. */
+  function updateSearchSelectionBar() {
+    updateExportIocsLabel();
+    if (!currentResults.length) { els.search_select_bar.style.display = 'none'; return; }
+    els.search_select_bar.style.display = 'flex';
+    var n = state.searchSelectedPaths.size;
+    var total = currentResults.length;
+    els.search_select_all_checkbox.checked = n > 0 && n === total;
+    els.search_select_all_checkbox.indeterminate = n > 0 && n < total;
+    els.search_select_count.textContent = n ? (n.toLocaleString() + ' of ' + total.toLocaleString() + ' selected') : total.toLocaleString() + ' result(s)';
+    els.btn_clear_search_select.style.display = n ? 'inline-block' : 'none';
+  }
+  els.search_select_all_checkbox.addEventListener('change', function () {
+    if (els.search_select_all_checkbox.checked) currentResults.forEach(function (r) { state.searchSelectedPaths.add(r.path); });
+    else state.searchSelectedPaths.clear();
+    updateSearchSelectionBar();
+    searchResultsList.setItems(currentResults.slice());
+  });
+  els.btn_clear_search_select.addEventListener('click', function () {
+    state.searchSelectedPaths.clear();
+    updateSearchSelectionBar();
+    searchResultsList.setItems(currentResults.slice());
+  });
 
   function clearSearchResults() {
     searchIdx.cancel();
     rawSearchObj.cancel();
     currentResults = [];
     searchResultsList.setItems([]);
+    state.searchSelectedPaths.clear();
+    state.lastClickedSearchPath = null;
+    updateSearchSelectionBar();
     els.search_status.textContent = '';
     els.btn_search_cancel.style.display = 'none';
     els.btn_clear_search.style.display = 'none';
@@ -1463,16 +1859,20 @@
     showSidebarView('search');
     currentResults = [];
     searchResultsList.setItems([]);
+    state.searchSelectedPaths.clear();
+    state.lastClickedSearchPath = null;
+    updateSearchSelectionBar();
     els.btn_search_cancel.style.display = 'inline-block';
     els.btn_clear_search.style.display = 'inline-block';
     // Captured so a slow search's results/progress never get applied to the
     // UI after the user has since opened a different folder.
     var searchedWorkspace = state.workspace;
     function stillCurrent() { return state.workspace === searchedWorkspace; }
+    var pathFilterOpts = { include: els.search_include.value, exclude: els.search_exclude.value };
 
     if (els.search_mode.value === 'decoded') {
       els.search_status.textContent = 'Searching…';
-      searchIdx.search(query, { isRegex: isToggleActive(els.search_regex), caseSensitive: isToggleActive(els.search_case) }).then(function (res) {
+      searchIdx.search(query, { isRegex: isToggleActive(els.search_regex), caseSensitive: isToggleActive(els.search_case), include: pathFilterOpts.include, exclude: pathFilterOpts.exclude }).then(function (res) {
         if (!stillCurrent()) return;
         els.btn_search_cancel.style.display = 'none';
         function numericFieldLabel(field, r) {
@@ -1488,11 +1888,18 @@
           return { path: r.path, subject: r.subject, fromAddr: r.fromAddr, snippet: 'matched: ' + parts.join(', ') };
         });
         searchResultsList.setItems(currentResults);
+        updateSearchSelectionBar();
         var warningNote = res.warnings && res.warnings.length ? ('  ⚠ ' + res.warnings[0]) : '';
+        // Only shown when the query actually touches attachment.ocr: -- that's the one field whose
+        // coverage is sparse/opportunistic by design (see searchIndex.js's addOcrText), so an honest
+        // "not exhaustive" note belongs right where those results are, not on every search.
+        var ocrNote = /attachment\.ocr\s*:/i.test(query)
+          ? ('  (OCR coverage: ' + searchIdx.ocrStats().coveredCount.toLocaleString() + ' email(s) OCR-indexed so far — not exhaustive)')
+          : '';
         els.search_status.textContent = res.results.length.toLocaleString() + ' match(es)' +
           (res.truncated ? ' (showing top ' + res.results.length + ' of ' + res.total.toLocaleString() + ')' : '') +
           ' — ' + (searchIdx.stats().indexed).toLocaleString() + '/' + (searchIdx.stats().total).toLocaleString() + ' emails indexed so far' +
-          warningNote;
+          warningNote + ocrNote;
       }).catch(function (err) {
         if (!stillCurrent()) return;
         els.btn_search_cancel.style.display = 'none';
@@ -1503,12 +1910,15 @@
       rawSearchObj.search(state.workspace, query, {
         isRegex: isToggleActive(els.search_regex),
         caseSensitive: isToggleActive(els.search_case),
+        include: pathFilterOpts.include,
+        exclude: pathFilterOpts.exclude,
         onMatches: function (matches) {
           if (!stillCurrent()) return;
           matches.forEach(function (m) {
             currentResults.push({ path: m.path, subject: m.path, fromAddr: '', snippet: m.count + ' match(es): ' + (m.snippets[0] ? m.snippets[0].snippet : '') });
           });
           searchResultsList.setItems(currentResults.slice());
+          updateSearchSelectionBar();
           els.search_status.textContent = currentResults.length.toLocaleString() + ' file(s) with matches so far…';
         },
         onProgress: function (done, total) {
@@ -1536,9 +1946,22 @@
     return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
   }
 
+  /** Export IOCs scopes to whatever the Search tab is currently showing: an explicit multi-selection
+   * first, else the current search/rule/tag results, else (nothing shown) the whole indexed folder. */
+  function iocExportScope() {
+    if (state.searchSelectedPaths.size) return { pathSet: new Set(state.searchSelectedPaths), label: state.searchSelectedPaths.size.toLocaleString() + ' selected email(s)' };
+    if (currentResults.length) return { pathSet: new Set(currentResults.map(function (r) { return r.path; })), label: currentResults.length.toLocaleString() + ' search result(s)' };
+    return { pathSet: null, label: 'the whole open folder' };
+  }
+  function updateExportIocsLabel() {
+    els.btn_export_iocs.title = 'Export sender domains, URL/link domains, attachment extensions, and financial-indicator types as one CSV — currently scoped to ' + iocExportScope().label + '.';
+  }
+  updateExportIocsLabel();
+
   els.btn_export_iocs.addEventListener('click', function () {
     if (!state.workspace) { alert('Open a folder first.'); return; }
-    var summary = searchIdx.iocSummary();
+    var scope = iocExportScope();
+    var summary = searchIdx.iocSummary(scope.pathSet);
     var rows = [['type', 'value', 'email_count']];
     summary.senderDomains.forEach(function (r) { rows.push(['sender_domain', r.value, r.count]); });
     summary.urlDomains.forEach(function (r) { rows.push(['url_domain', r.value, r.count]); });
@@ -1799,7 +2222,7 @@
             var t = tabMgr.list().filter(function (t) { return t.path === data.activeTabPath; })[0];
             if (t) tabMgr.activate(t.id);
           }
-          els.btn_resume.style.display = 'none';
+          // setWorkspace(ws) above already hid this button -- see its own comment.
         } catch (e) {
           alert('Could not resume: ' + e.message);
         }
