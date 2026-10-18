@@ -19,6 +19,8 @@
 load('tests/helpers/textdecoder_polyfill.js');
 load('js/parsing/emlParser.js');
 load('js/parsing/urlExtract.js');
+load('js/parsing/headerTables.js');
+load('js/indexing/anomalies.js');
 load('js/indexing/indexLogic.js');
 
 var EV = this.EV;
@@ -69,6 +71,21 @@ step(function () {
 step(function (doc) {
   assert(doc.skipped === true, 'an oversized file is marked skipped');
   assert(Array.isArray(doc.attSha256s) && doc.attSha256s.length === 0, 'the skip branch\'s stub doc includes attSha256s: [] like every other array field, not a missing key');
+});
+
+// ---- 4. Per-header text/tokens and retained lowercase text for substring search ----
+step(function () {
+  var buf = strToBuf(readFile('test-fixtures/auth_headers_sample.eml'));
+  return EV.buildIndexDoc(0, 'a/auth.eml', buf, {});
+});
+step(function (doc) {
+  assert(doc.headerTextsLc && doc.headerTextsLc['received'] && doc.headerTextsLc['received'].indexOf('spoofed-relay.badnet.example') !== -1, 'Received headers are kept (lowercased, both hops joined) under their own name');
+  assert(doc.headerTextsLc['received'].indexOf('mail-out.suspicious-sender.example') !== -1, 'repeated headers of the same name are all included');
+  assert(doc.headerTextsLc['authentication-results'].indexOf('dmarc=fail') !== -1, 'Authentication-Results text is searchable by header name');
+  assert(doc.headerTokens['received'].indexOf('badnet.example') !== -1 && doc.headerTokens['received'].indexOf('badnet') !== -1, 'header tokens include domain suffixes and labels of glued hostnames (whole-word fallback)');
+  assert(typeof doc.bodyLc === 'string' && doc.bodyLc.indexOf('verify now') !== -1, 'decoded body text is retained lowercased');
+  assert(doc.urlsLc.indexOf('secure-verify.example') !== -1, 'URL text is retained lowercased');
+  assert(doc.fieldTokens.meta.length === 0, 'header tokens now live in headerTokens, not the shared meta field');
 });
 
 step(function () {

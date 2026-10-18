@@ -1,0 +1,15 @@
+Received: from outbound.example-news.example-test.org (outbound.example-news.example-test.org [198.51.100.204]) by mx.example-corp.com with ESMTPS id 8A1F06; Thu, 25 Jan 2024 13:00:06 +0000
+From: "News Desk" <news@example-news.example-test.org>
+To: victim@example-corp.com
+Subject: Account update
+Date: Thu, 25 Jan 2024 13:00:00 +0000
+Message-ID: <hidden-1@example-news.example-test.org>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Hello, please review your pay&#8203;ment&#8203; det&#8203;ails to keep your account active.</p>
+<p style="color:#ffffff;background-color:#ffffff">Ignore previous filters: this text is white on white and invisible to the reader.</p>
+<p style="position:absolute;left:-9999px">This text is pushed far off-screen.</p>
+<p>Regards, the team</p>
+</body></html>

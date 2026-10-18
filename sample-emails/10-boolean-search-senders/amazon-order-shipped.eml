@@ -1,3 +1,5 @@
+Received: from shipping.amazon.com (shipping.amazon.com [203.0.113.200]) by mx.example-corp.com with ESMTPS id 4C18B6; Tue, 23 Jan 2024 15:40:06 +0000
+Received: from fulfil03.amazon.com (fulfil03.amazon.com [203.0.113.201]) by shipping.amazon.com with ESMTP id E51; Tue, 23 Jan 2024 15:40:03 +0000
 From: "Amazon" <shipment-tracking@amazon.com>
 To: jane.doe@example-corp.com
 Subject: Your order has shipped

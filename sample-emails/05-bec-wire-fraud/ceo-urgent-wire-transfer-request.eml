@@ -1,3 +1,5 @@
+Received: from mail.examplle-corp.com (mail.examplle-corp.com [192.0.2.80]) by mx.example-corp.com with ESMTPS id 8E41B7; Fri, 19 Jan 2024 14:05:30 +0000
+Received: from [192.0.2.99] (unknown [192.0.2.99]) by smtp.freemail-host.example with ESMTPSA id 33F0; Fri, 19 Jan 2024 14:05:12 +0000
 From: "Michael Chen (CEO)" <michael.chen@examplle-corp.com>
 To: finance@example-corp.com
 Subject: URGENT - confidential wire transfer needed today

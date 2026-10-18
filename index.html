@@ -14,6 +14,7 @@
     <button id="ev-btn-open-files" class="ev-btn" title="Open loose .eml files"><span class="ev-icon"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg></span> Open Files</button>
     <button id="ev-btn-resume" class="ev-btn" style="display:none" title="Resume your last session"></button>
     <input id="ev-import-tags-input" type="file" accept="application/json" style="display:none">
+    <button id="ev-btn-overview" class="ev-icon-btn" title="Folder overview — how many emails carry each security flag"><span class="ev-icon"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M2.5 13.5v-4M6.5 13.5v-9M10.5 13.5v-6M14 13.5H2"/></svg></span></button>
     <button id="ev-btn-settings" class="ev-icon-btn" title="Settings — trusted domains"><span class="ev-icon"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.6M8 12.8v1.6M14.4 8h-1.6M3.2 8H1.6M12.4 3.6l-1.13 1.13M4.73 11.27L3.6 12.4M12.4 12.4l-1.13-1.13M4.73 4.73L3.6 3.6" stroke-linecap="round"/></svg></span></button>
   </div>
 
@@ -61,8 +62,9 @@
         </details>
         <div id="ev-bulk-tag-bar" style="display:none">
           <span id="ev-bulk-tag-count" class="ev-muted-small"></span>
-          <input id="ev-bulk-tag-input" type="text" placeholder="tag name…" title="Applies to every selected email at once.">
-          <button id="ev-btn-bulk-tag-apply" class="ev-mini-btn">Add tag</button>
+          <input id="ev-bulk-tag-input" type="text" placeholder="tag name…" title="Lowercase a–z, 0–9, - and _ only. Tag file / Un-Tag file act on every selected email at once.">
+          <button id="ev-btn-bulk-tag-apply" class="ev-mini-btn" title="Tag file: add this tag to every selected email">Tag file</button>
+          <button id="ev-btn-bulk-tag-remove" class="ev-mini-btn" title="Un-Tag file: take this tag off the selected emails only. (To delete the tag itself from every email, use Tag Deletion on the Tags tab.)">Un-Tag file</button>
           <button id="ev-btn-bulk-tag-clear" class="ev-mini-btn">Clear</button>
         </div>
         <div id="ev-tree-container" class="ev-scroll-area" title="Ctrl/Cmd-click or Shift-click a file to select multiple, then tag them all at once."></div>
@@ -78,7 +80,7 @@
             <button id="ev-btn-search-help" class="ev-mini-btn" title="Search syntax reference">?</button>
           </div>
           <div class="ev-search-panel-row">
-            <input id="ev-search-input" type="text" placeholder='e.g. header.from:paypal "verify your account" attachment.count:>3'>
+            <input id="ev-search-input" type="text" placeholder='any text, e.g. paypal "verify your account" · header.received:google.com · auth.dmarc:fail'>
           </div>
           <div class="ev-search-panel-row">
             <button id="ev-btn-search" class="ev-btn ev-btn-primary">Search</button>
@@ -124,6 +126,15 @@
         <div id="ev-tags-report-toolbar">
           <button id="ev-btn-export-report" class="ev-btn" title="Generate a shareable Markdown report of every tagged email in this folder, grouped by tag">📄 Case Report (Markdown)</button>
         </div>
+        <div id="ev-tag-actions">
+          <div id="ev-tag-actions-hint" class="ev-muted-small"></div>
+          <div id="ev-tag-actions-buttons">
+            <button id="ev-btn-tag-view" class="ev-btn" disabled title="List the emails carrying the ticked tags in the Search tab">View files</button>
+            <button id="ev-btn-tag-remove" class="ev-btn" disabled>Un-Tag file</button>
+            <button id="ev-btn-tag-delete" class="ev-btn ev-btn-danger" disabled title="Tag Deletion: delete the ticked tags themselves, taking them off every email that carries them (asks first, undo available)">Tag Deletion</button>
+            <button id="ev-btn-tag-files" class="ev-btn" disabled title="Copy paths, move, copy or delete the emails carrying the ticked tags">Copy / move / delete emails…</button>
+          </div>
+        </div>
         <div class="ev-muted-small">Filter the tree by tag:</div>
         <div id="ev-tag-filter-list"></div>
       </div>
@@ -152,12 +163,14 @@
       <div id="ev-subtab-nav"></div>
       <div id="ev-loading" style="display:none"></div>
       <div id="ev-content" class="ev-scroll-area"></div>
+      <div id="ev-view-overview" style="display:none"></div>
       <div id="ev-view-settings">
         <h2>Settings</h2>
         <div id="ev-settings-layout">
           <nav id="ev-settings-nav">
             <button type="button" class="ev-settings-nav-item active" data-settings-section="ide">IDE Config</button>
             <button type="button" class="ev-settings-nav-item" data-settings-section="trusted">Trusted Domains</button>
+            <button type="button" class="ev-settings-nav-item" data-settings-section="organization">Organization</button>
             <button type="button" class="ev-settings-nav-item" data-settings-section="categories">Domain Categories</button>
           </nav>
           <div id="ev-settings-detail" class="ev-scroll-area">
@@ -185,6 +198,16 @@
               <div class="ev-settings-row">
                 <button id="ev-btn-add-trusted-domain" class="ev-mini-btn">+ Add</button>
                 <button id="ev-btn-reset-trusted-domains" class="ev-mini-btn">Reset to defaults</button>
+              </div>
+            </section>
+
+            <section id="ev-settings-section-organization" class="ev-settings-section" style="display:none">
+              <div class="ev-settings-section-title">Organization<button type="button" class="ev-info-toggle" title="What is this?">ⓘ</button></div>
+              <p class="ev-muted-small ev-info-body" style="display:none">Your organization's own domains (a domain also covers its subdomains). With these set, the Preview shows whether each email is <b>Internal</b> or <b>External</b>, and the Security checks flag mail that uses one of your domains but entered from a public address and is not authenticated as you (<code>meta.flag:claims-internal</code>). Nothing is guessed: with no domains here, no internal/external verdict is shown. Search flags are computed while a folder is indexed, so re-open the folder after changing this list.</p>
+              <div id="ev-internal-domains-list"></div>
+              <textarea id="ev-internal-domain-input" rows="3" placeholder="mycompany.com, mycompany.net"></textarea>
+              <div class="ev-settings-row">
+                <button id="ev-btn-add-internal-domain" class="ev-mini-btn">+ Add</button>
               </div>
             </section>
 
@@ -260,6 +283,7 @@
     <button id="ev-btn-stop-indexing" class="ev-statusbar-stop-btn" style="display:none">Stop</button>
     <span id="ev-status-ocr" style="display:none"></span>
     <button id="ev-btn-stop-ocr" class="ev-statusbar-stop-btn" style="display:none">Stop</button>
+    <button id="ev-status-remote" class="ev-statusbar-warn-btn" style="display:none" title="Remote images/content are being loaded for every email you open. Click to turn off.">Remote content: ON</button>
     <span id="ev-status-selected"></span>
     <span id="ev-status-mode"></span>
   </div>
@@ -272,10 +296,14 @@
 <script src="js/parsing/emlParser.js"></script>
 <script src="js/parsing/icsParser.js"></script>
 <script src="js/parsing/urlExtract.js"></script>
+<script src="js/parsing/headerTables.js"></script>
+<script src="js/indexing/anomalies.js"></script>
 <script src="js/indexing/indexLogic.js"></script>
 <script src="js/parsing/sanitize.js"></script>
 <script src="js/core/tags.js"></script>
 <script src="js/core/settings.js"></script>
+<script src="js/core/settingsCache.js"></script>
+<script src="js/core/folderPath.js"></script>
 <script src="js/core/ocrCache.js"></script>
 <script src="js/core/whois.js"></script>
 <script src="js/rules/rulesStore.js"></script>
@@ -283,7 +311,16 @@
 <script src="js/core/session.js"></script>
 <script src="js/ui/fileTree.js"></script>
 <script src="js/ui/virtualList.js"></script>
+<script src="js/ui/searchSuggest.js"></script>
+<script src="js/ui/ruleSuggest.js"></script>
+<script src="js/ui/tagInput.js"></script>
 <script src="js/ui/tabs.js"></script>
+<script src="js/ui/dialogs.js"></script>
+<script src="js/ui/uiKit.js"></script>
+<script src="js/ui/email/securityCard.js"></script>
+<script src="js/ui/email/headersView.js"></script>
+<script src="js/ui/email/attachmentsView.js"></script>
+<script src="js/ui/overlays.js"></script>
 <script src="js/ui/render.js"></script>
 <script src="js/indexing/workerClient.js"></script>
 <script src="js/indexing/pathFilter.js"></script>
@@ -293,6 +330,18 @@
 <!-- The only ES module in this app -- native browser feature, no bundler. See ocrBridge.js's own
      top comment and vendor/VENDOR.md for why tesseract-wasm specifically needs this loading style. -->
 <script type="module" src="js/core/ocrBridge.js"></script>
+<script src="js/ui/features/explorer.js"></script>
+<script src="js/ui/features/fileOps.js"></script>
+<script src="js/ui/features/tabsView.js"></script>
+<script src="js/ui/features/pages.js"></script>
+<script src="js/ui/features/folderLocation.js"></script>
+<script src="js/ui/features/workspace.js"></script>
+<script src="js/ui/features/tagsPanel.js"></script>
+<script src="js/ui/features/settingsPage.js"></script>
+<script src="js/ui/features/rulesPanel.js"></script>
+<script src="js/ui/features/searchPanel.js"></script>
+<script src="js/ui/features/exportsPanel.js"></script>
+<script src="js/ui/features/session.js"></script>
 <script src="js/ui/app.js"></script>
 </body>
 </html>

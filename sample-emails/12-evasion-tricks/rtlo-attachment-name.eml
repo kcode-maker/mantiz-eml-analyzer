@@ -1,0 +1,22 @@
+Received: from mail.invoice-portal.example-test.net (mail.invoice-portal.example-test.net [198.51.100.201]) by mx.example-corp.com with ESMTPS id 8A1F03; Thu, 25 Jan 2024 10:00:06 +0000
+From: "Accounts" <billing@invoice-portal.example-test.net>
+To: accounts-payable@example-corp.com
+Subject: Invoice attached
+Date: Thu, 25 Jan 2024 10:00:00 +0000
+Message-ID: <rtlo-1@invoice-portal.example-test.net>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B12A"
+
+--B12A
+Content-Type: text/plain; charset=utf-8
+
+Please find the invoice attached. The file name below ends in "jpg" on screen,
+but a hidden right-to-left override character reverses its real extension.
+
+--B12A
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename*=utf-8''invoice%E2%80%AEgpj.exe
+Content-Transfer-Encoding: base64
+
+TVqQAAMAAABIQVJNTEVTUyBTQU1QTEUgUExBQ0VIT0xERVIgLSBOT1QgQSBQUk9HUkFN
+--B12A--

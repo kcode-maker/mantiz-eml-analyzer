@@ -1,3 +1,5 @@
+Received: from mail.example-corp.com (mail.example-corp.com [10.0.1.5]) by mx.example-corp.com with ESMTP id 3B6E17; Wed, 24 Jan 2024 09:00:03 +0000
+Received: from jane-laptop (jane-laptop.example-corp.com [10.0.2.41]) by mail.example-corp.com with ESMTPSA id 0C19D8; Wed, 24 Jan 2024 09:00:01 +0000
 From: "Jane Doe" <jane.doe@example-corp.com>
 To: team@example-corp.com
 Subject: Invite: Quarterly Planning Sync

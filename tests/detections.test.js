@@ -13,6 +13,8 @@
  */
 var EV = {};
 this.EV = EV;
+load('js/parsing/headerTables.js');
+load('js/indexing/anomalies.js');
 load('js/indexing/indexLogic.js');
 
 var pass = 0, fail = 0;

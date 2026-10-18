@@ -1,9 +1,11 @@
+Received: from portal.secure-file-share-portal.example-test.com (portal.secure-file-share-portal.example-test.com [198.51.100.170]) by mx.example-corp.com with ESMTPS id 7D5A29; Wed, 24 Sep 2025 09:14:05 +0000
 From: "SharePoint Notifications" <notifications@secure-file-share-portal.example-test.com>
 To: victim@example-corp.com
 Subject: Bretney Webb shared "Company Profit Sharing" with you
 Date: Wed, 24 Sep 2025 09:14:00 +0000
 Message-ID: <sample11-image-lure@example-test.com>
 Authentication-Results: mx.example-corp.com; spf=fail smtp.mailfrom=secure-file-share-portal.example-test.com; dkim=none; dmarc=fail
+Authentication-Results: mx.example-corp.com; spf=pass smtp.mailfrom=secure-file-share-portal.example-test.com; dkim=pass; dmarc=pass
 MIME-Version: 1.0
 Content-Type: multipart/related; boundary="----=_NextPart_MantizSample_11"
 

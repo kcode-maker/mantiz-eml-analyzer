@@ -39,10 +39,24 @@ echo
 echo "== Running tests/*.test.js =="
 for f in tests/*.test.js; do
   echo "--- $f ---"
-  "$JSC" "$f"
-  if [ $? -ne 0 ]; then fail=1; fi
+  out=$("$JSC" "$f" 2>&1); code=$?
+  echo "$out"
+  if [ $code -ne 0 ]; then fail=1; fi
+  # A promise-based suite that fails inside a .then() leaves jsc's exit status at 0, so also trust the output itself.
+  if echo "$out" | grep -Eq '^(FAIL:|Exception:)|FAIL: [1-9]'; then fail=1; fi
   echo
 done
+
+if command -v python3 >/dev/null 2>&1; then
+  echo "--- tests/test_folder_locator.py ---"
+  python3 tests/test_folder_locator.py 2>&1 | tail -4
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then fail=1; fi
+  echo
+  echo "--- tests/test_structure.py ---"
+  python3 tests/test_structure.py 2>&1 | tail -4
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then fail=1; fi
+  echo
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo "FAILED"

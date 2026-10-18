@@ -1,3 +1,5 @@
+Received: from mail.supplier-invoices.net (mail.supplier-invoices.net [203.0.113.120]) by mx.example-corp.com with ESMTPS id 1F9D02; Sun, 21 Jan 2024 09:50:00 +0000
+Received: from billing01.supplier-invoices.net (billing01.supplier-invoices.net [203.0.113.121]) by mail.supplier-invoices.net with ESMTP id A41; Sun, 21 Jan 2024 10:20:00 +0000
 From: "Accounts Receivable" <ar@supplier-invoices.net>
 To: accounts-payable@example-corp.com
 Subject: Overdue invoice - please review attached

@@ -1,6 +1,9 @@
 // Minimal TextDecoder polyfill for jsc (UTF-8 + latin1 fallback), test-only.
+var __KNOWN_LABELS = /^(utf-?8|utf-16(le|be)?|latin1|iso-8859-\d+|windows-125\d|us-ascii|ascii|gb2312|gbk|big5|shift_jis|euc-kr|euc-jp|koi8-r|iso-2022-jp)$/;
 function TextDecoder(enc) {
   this.encoding = (enc || 'utf-8').toLowerCase();
+  // Real TextDecoders throw RangeError for a label they do not know (the parser relies on that to fall back to UTF-8).
+  if (!__KNOWN_LABELS.test(this.encoding)) throw new RangeError('The encoding label provided (' + enc + ') is invalid.');
 }
 TextDecoder.prototype.decode = function (bytes) {
   var arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);

@@ -53,8 +53,16 @@
       'img{max-width:100%;}table{max-width:100%;}pre.ev-plain{white-space:pre-wrap;word-wrap:break-word;' +
       'font-family:inherit;margin:0;}' +
       '.ev-url{color:#0a5cd8;text-decoration:underline;word-break:break-all;}' +
-      '.ev-link{cursor:help;text-decoration-style:dotted;}' +
+      '.ev-link{cursor:pointer;text-decoration-style:dotted;}' +  // click copies the URL (render.js); it never opens it
       '.ev-link-mismatch{background:rgba(224,49,49,.22);outline:1px dashed #e03131;border-radius:2px;}' +
+      // Always-visible scrollbars: a long or very wide message scrolls inside the body panel, and the
+      // scroller shows even where the OS hides overlay scrollbars until you scroll.
+      '::-webkit-scrollbar{width:12px;height:12px;}::-webkit-scrollbar-track{background:#eceff4;}' +
+      '::-webkit-scrollbar-thumb{background:#9aa4b5;border-radius:8px;border:2px solid #eceff4;}' +
+      '::-webkit-scrollbar-thumb:hover{background:#7b8699;}::-webkit-scrollbar-corner{background:#eceff4;}' +
+      // Firefox has no ::-webkit-scrollbar; give it the standard properties instead (guarded, so engines that
+      // support the webkit pseudo-elements keep using them).
+      '@supports not selector(::-webkit-scrollbar){html{scrollbar-color:#9aa4b5 #eceff4;}}' +
       '</style></head><body>' + bodyHtml + '</body></html>';
   }
 

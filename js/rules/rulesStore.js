@@ -16,11 +16,14 @@
     return 'r_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
   }
 
+  // Auto-generated rule tags follow the same name rules as every other tag (see EV.tags.normalizeName):
+  // lowercase a-z, 0-9, hyphen and underscore, at most 40 characters.
   function slugify(name) {
     return String(name).toLowerCase().trim()
-      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/-{2,}/g, '-')
       .replace(/^-+|-+$/g, '')
-      .slice(0, 40) || 'rule';
+      .slice(0, 40).replace(/-+$/, '') || 'rule';
   }
 
   function matchKey(ruleId, emailId) {
@@ -72,6 +75,11 @@
         if (!rule) throw new Error('Rule not found: ' + id);
         var oldTag = rule.tag;
         Object.assign(rule, fields, { updatedAt: Date.now() });
+        // A rule whose tag was deleted (blockedTag) stays off until its tag is changed to a different one.
+        if (fields.tag !== undefined && fields.tag !== rule.blockedTag && !('blockedTag' in fields)) rule.blockedTag = null;
+        if (rule.enabled && rule.blockedTag) {
+          throw new Error('The tag "' + rule.blockedTag + '" was deleted, so this rule can\u2019t be enabled with it \u2014 edit the rule and choose a different tag first.');
+        }
         var rename = (fields.tag && fields.tag !== oldTag)
           ? EV.rulesStore.renameTag(id, oldTag, fields.tag)
           : Promise.resolve();
@@ -79,6 +87,24 @@
           return EV.db.put('rules', rule).then(function () { return rule; });
         });
       });
+    },
+
+    /** Called when a tag is deleted: every rule applying it (enabled or not) is switched off and marked so
+     * it can't be re-enabled until it is given a different tag. Resolves to [{rule, wasEnabled}]. */
+    blockRulesForDeletedTag: function (tagName) {
+      return EV.rulesStore.list().then(function (rules) {
+        var hit = rules.filter(function (r) { return r.tag === tagName; });
+        return Promise.all(hit.map(function (r) {
+          var wasEnabled = !!r.enabled;
+          return EV.rulesStore.update(r.id, { enabled: false, blockedTag: tagName, lastRun: null }).then(function (rule) {
+            return { rule: rule, wasEnabled: wasEnabled };
+          });
+        }));
+      });
+    },
+    /** Undo of blockRulesForDeletedTag: lifts the block (the caller re-enables those that were enabled). */
+    unblockRule: function (id) {
+      return EV.rulesStore.update(id, { blockedTag: null });
     },
 
     /**
@@ -153,6 +179,28 @@
      * only created — so importing 20 rules doesn't kick off 20 sequential
      * full-folder scans; run them from the Rules panel when ready.
      */
+    /** One-off: converts saved rules whose tag predates the tag-name rules (capitals, spaces, ...).
+     * Only the rule's own tag text changes -- the tags already on emails are converted separately by
+     * EV.tags.migrateLegacyNames, so this deliberately does not re-tag anything. Resolves to the
+     * number of rules changed. */
+    migrateTagNames: function () {
+      return EV.rulesStore.list().then(function (rules) {
+        var taken = {};
+        rules.forEach(function (r) { if (r.tag === EV.tags.sanitizeLegacy(r.tag)) taken[r.tag] = true; });
+        var changed = [];
+        rules.forEach(function (r) {
+          var fixed = EV.tags.sanitizeLegacy(r.tag);
+          if (fixed === r.tag) return;
+          var base = fixed, n = 2;
+          while (taken[fixed]) { fixed = base + '-' + n; n++; }
+          taken[fixed] = true;
+          r.tag = fixed;
+          changed.push(r);
+        });
+        return Promise.all(changed.map(function (r) { return EV.db.put('rules', r); })).then(function () { return changed.length; });
+      });
+    },
+
     importJson: function (jsonText) {
       var parsed = JSON.parse(jsonText);
       var incoming = parsed.rules || parsed;
@@ -160,7 +208,8 @@
       return EV.rulesStore.list().then(function (existing) {
         var takenTags = {};
         existing.forEach(function (r) { takenTags[r.tag] = true; });
-        var toCreate = incoming.filter(function (r) { return r && r.name && r.expression && r.tag; });
+        var toCreate = incoming.filter(function (r) { return r && r.name && r.expression && r.tag; })
+          .map(function (r) { return Object.assign({}, r, { tag: EV.tags.sanitizeLegacy(r.tag) }); }); // old exports may hold invalid names
         var chain = Promise.resolve();
         var imported = 0, skipped = 0;
         toCreate.forEach(function (r) {

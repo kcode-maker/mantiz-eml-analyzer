@@ -1,3 +1,5 @@
+Received: from outbound.mail.paypal.com (outbound.mail.paypal.com [198.51.100.60]) by mx.example-corp.com with ESMTPS id 2E07F3; Tue, 23 Jan 2024 11:15:05 +0000
+Received: from app12.paypal.com (app12.paypal.com [198.51.100.61]) by outbound.mail.paypal.com with ESMTP id D90; Tue, 23 Jan 2024 11:15:02 +0000
 From: "PayPal" <receipts@paypal.com>
 To: jane.doe@example-corp.com
 Subject: Receipt for your payment to Acme Supplies

@@ -198,6 +198,18 @@ step(function () {
 });
 
 step(function () {
+  return EV.settings.internalDomains().then(function (d) {
+    assert(Array.isArray(d) && d.length === 0, 'internalDomains: empty until the user sets it (nothing is guessed)');
+    return EV.settings.setInternalDomains(['Corp.Example', '@corp.net', 'corp.example', 'not a domain', 'localhost', '', 'a..b']);
+  }).then(function (saved) {
+    assert(JSON.stringify(saved) === JSON.stringify(['corp.example', 'corp.net']), 'setInternalDomains lowercases, strips @, dedupes and drops anything that is not a dotted domain (' + JSON.stringify(saved) + ')');
+    return EV.settings.internalDomains();
+  }).then(function (d) {
+    assert(d.length === 2, 'internalDomains persists');
+  });
+});
+
+step(function () {
   print('---');
   print('PASS: ' + pass + '  FAIL: ' + fail);
   if (fail > 0) throw new Error(fail + ' test(s) failed');

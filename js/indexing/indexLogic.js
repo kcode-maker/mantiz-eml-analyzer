@@ -15,6 +15,8 @@
   var EV = g.EV || (g.EV = {});
 
   var MAX_INDEXABLE_BYTES = 15 * 1024 * 1024; // skip indexing pathologically large messages
+  var INVISIBLE_RE = /[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
+  var BODY_RETAIN_CHARS = 200000; // decoded body text kept per email for substring search (first N chars)
 
   // Deliberately NOT exported as EV.sha256Hex -- js/ui/render.js already exports its own copy of
   // this under that exact name for the main-thread UI (attachment hash display, the bulk OCR
@@ -90,20 +92,30 @@
         fileId: fileId, path: path, emailId: 'hash:toolarge:' + fileId, subject: '(too large to index: ' + Math.round(buffer.byteLength / 1e6) + ' MB)',
         fromName: '', fromAddr: '', fromDomain: '', toStr: '', ccStr: '', bccStr: '', replyToStr: '', returnPathStr: '', messageId: null,
         dateMs: null, size: buffer.byteLength, attCount: 0,
-        attNames: '', attExts: [], attSha256s: [], urlCount: 0, urlDomains: [], recipientCount: 0, fieldTokens: {}, skipped: true,
+        attNames: '', attNameList: [], attExts: [], attSha256s: [], urlCount: 0, urlDomains: [], recipientCount: 0, fieldTokens: {}, skipped: true,
         nameMismatch: false, lookalikeDomain: false, punycodeSender: false, urgencyScore: 0, financialIndicators: [],
-        domainCategories: []
+        domainCategories: [], replyToDomain: '', returnPathDomain: '', replyToMismatch: false, returnPathMismatch: false,
+        anomalyFlags: [], subjectScripts: [], bodyScripts: [], originIp: '', connectingIp: ''
       };
     }
     var parsed = EV.parseEml(buffer);
-    var bodyText = (parsed.textBody || '') + '\n' + EV.htmlToText(parsed.htmlBody || '');
+    // Invisible characters (soft hyphen, zero-width space/joiners, bidi marks, BOM) are dropped from the text
+    // that gets searched: phishing inserts them inside words ("pay&shy;pal") so keyword filters miss them.
+    var htmlTextValue = EV.htmlToText(parsed.htmlBody || '');
+    var bodyText = ((parsed.textBody || '') + '\n' + htmlTextValue).replace(INVISIBLE_RE, '');
     var urls = EV.extractUrls(parsed.textBody, parsed.htmlBody);
+    // Links to internationalized hosts are searchable by their readable name too (xn--e1afmkfd.xn--p1ai -> пример.рф).
+    var urlsText = urls.concat(EV.unicodeHostsOfUrls(urls)).join(' ');
     var fromAddr = parsed.from[0] ? parsed.from[0].address : '';
     var fromName = parsed.from[0] ? parsed.from[0].name : '';
-    var toStr = parsed.to.map(function (a) { return a.address; }).join(' ');
-    var ccStr = parsed.cc.map(function (a) { return a.address; }).join(' ');
-    var bccStr = parsed.bcc.map(function (a) { return a.address; }).join(' ');
-    var replyToStr = parsed.replyTo.map(function (a) { return a.address; }).join(' ');
+    // Display names (already decoded from RFC 2047 by the parser) are searchable alongside the address:
+    // header.to:Jürgen finds "Jürgen Müller <jm@example.de>". The address stays its own whole word, so
+    // searching a full address works exactly as before.
+    function addrsText(list) { return list.map(function (a) { return (a.name ? a.name + ' ' : '') + a.address; }).join(' '); }
+    var toStr = addrsText(parsed.to);
+    var ccStr = addrsText(parsed.cc);
+    var bccStr = addrsText(parsed.bcc);
+    var replyToStr = addrsText(parsed.replyTo);
     // Return-Path isn't part of emlParser.js's core parsed shape (it's a raw envelope header, not an
     // address-list field like to/cc/bcc/replyTo) -- same raw-header-lookup buildRuleFacts already uses.
     var returnPathRaw = EV.getHeader(parsed.headers, 'return-path');
@@ -123,6 +135,23 @@
     // filtered out rather than left in the array, so a search never has to special-case them.
     var attSha256s = (await Promise.all(parsed.attachments.map(function (a) { return sha256HexBytes(a.bytes); }))).filter(Boolean);
     var headerBlob = parsed.headers.map(function (h) { return h.value; }).join(' ');
+    // Per-header-name text (RFC 2047-decoded, lowercased) so a search can target one header
+    // (header.received:, header.x-mailer:, ...). Capped at 64 distinct names per email; anything
+    // beyond that (or with an unusable name) is folded into the '*' bucket, which still counts for
+    // header.raw / plain searches. Decoded once here, in the worker, not per query.
+    var headerTexts = {};
+    parsed.headers.forEach(function (h) {
+      var n = String(h.lower || h.name || '').toLowerCase();
+      if (!/^[a-z0-9][a-z0-9_.\-]{0,63}$/.test(n) || (!headerTexts.hasOwnProperty(n) && Object.keys(headerTexts).length >= 64)) n = '*';
+      var v = EV.decodeHeaderText ? EV.decodeHeaderText(h.value || '') : (h.value || '');
+      headerTexts[n] = (headerTexts[n] ? headerTexts[n] + '\n' : '') + v;
+    });
+    var headerTokens = {};
+    var headerTextsLc = {};
+    Object.keys(headerTexts).forEach(function (n) {
+      headerTokens[n] = EV.tokenizeExpanded(headerTexts[n]);
+      headerTextsLc[n] = headerTexts[n].toLowerCase();
+    });
     var uniqueRecipientAddrs = {};
     parsed.to.concat(parsed.cc, parsed.bcc).forEach(function (a) {
       if (a.address) uniqueRecipientAddrs[a.address.toLowerCase()] = true;
@@ -139,6 +168,11 @@
       [fromDomainValue].concat(urlDomainsValue, EV.extractDomainLikeTokens(headerBlob), EV.extractDomainLikeTokens(attNames)),
       opts.domainCategories
     );
+    // Reply-To / Return-Path domains and whether each differs from the sender's -- exactly what the Metadata
+    // card's "mismatch" badges show (exact comparison, not organizational alignment), so search agrees with it.
+    var anomalies = EV.analyzeAnomalies(parsed, { htmlText: htmlTextValue, urls: urls, internalDomains: opts.internalDomains, trustedDomains: opts.trustedDomains, domainCategories: opts.domainCategories }); // the Security card's checklist (js/indexing/anomalies.js): one definition for card, search and rules
+    var replyToDomainValue = (parsed.replyTo && parsed.replyTo[0] && domainOf(parsed.replyTo[0].address)) || '';
+    var returnPathDomainValue = domainOf(returnPathStr) || '';
 
     var fieldTokens = {
       subject: EV.tokenize(parsed.subject),
@@ -149,9 +183,9 @@
       replyto: EV.tokenize(replyToStr),
       returnpath: EV.tokenize(returnPathStr),
       body: EV.tokenize(bodyText),
-      url: EV.tokenize(urls.join(' ')),
+      url: EV.tokenize(urlsText),
       attachment: EV.tokenize(attNames),
-      meta: EV.tokenize(headerBlob)
+      meta: []
     };
 
     return {
@@ -172,6 +206,7 @@
       size: buffer.byteLength,
       attCount: parsed.attachments.length,
       attNames: attNames,
+      attNameList: parsed.attachments.map(function (a) { return a.filename || ''; }),
       attExts: attExts,
       attSha256s: attSha256s,
       urlCount: urls.length,
@@ -181,12 +216,28 @@
       dkim: parsed.authSummary.dkim,
       dmarc: parsed.authSummary.dmarc,
       fieldTokens: fieldTokens,
+      headerTokens: headerTokens,
+      // Lowercased decoded text kept in the main-thread index (within its memory budget) so decoded
+      // search can match ANY substring in the body/URLs/headers, not just whole indexed words.
+      bodyLc: bodyText.slice(0, BODY_RETAIN_CHARS).toLowerCase(),
+      bodyTruncated: bodyText.length > BODY_RETAIN_CHARS,
+      urlsLc: urlsText.toLowerCase(),
+      headerTextsLc: headerTextsLc,
       nameMismatch: nameMismatch,
       lookalikeDomain: lookalikeDomain,
       punycodeSender: punycodeSender,
       urgencyScore: EV.urgencyScore(bodyText),
       financialIndicators: EV.extractFinancialIndicators(bodyText),
       domainCategories: domainCategories,
+      replyToDomain: replyToDomainValue,
+      returnPathDomain: returnPathDomainValue,
+      replyToMismatch: anomalies.flags.indexOf('replyto-mismatch') !== -1,
+      returnPathMismatch: anomalies.flags.indexOf('returnpath-mismatch') !== -1,
+      anomalyFlags: anomalies.flags,
+      originIp: anomalies.metrics.originIp,           // earliest public IP in the Received chain (can be forged by the sender)
+      connectingIp: anomalies.metrics.connectingIp,   // newest public IP: recorded by the receiving side, the one to block
+      subjectScripts: anomalies.subjectScripts,
+      bodyScripts: anomalies.bodyScripts,
       skipped: false
     };
   };
@@ -221,26 +272,39 @@
     // OOM crash on a folder full of such outliers.
     if (buffer.byteLength > MAX_INDEXABLE_BYTES) return null;
     var bytes = new Uint8Array(buffer);
-    var raw = EV.bytesToBinaryString(bytes);
+    var latin1 = EV.bytesToBinaryString(bytes); // the file byte-for-byte, one char per byte
+    // ASCII queries (the common case, and anything that's an encoded form like "=?UTF-8?B?" or a base64
+    // fragment) search that view. A query with non-ASCII characters ("оплату", "café") can never match
+    // UTF-8 text through it -- each such character is 2-4 bytes there -- so look at the file as UTF-8 text
+    // first, then (only if the query fits in single bytes) as legacy 8-bit text too.
+    var views = [latin1];
+    if (/[^\x00-\x7f]/.test(opts.query)) {
+      views = [new TextDecoder('utf-8').decode(bytes)];
+      if (!/[^\x00-\xff]/.test(opts.query)) views.push(latin1);
+    }
+    var raw = latin1;
     var matches = [];
-    if (opts.isRegex) {
-      var flags = 'g' + (opts.caseSensitive ? '' : 'i');
-      var re;
-      try {
-        re = new RegExp(opts.query, flags);
-      } catch (e) {
-        return { error: 'Invalid regex: ' + e.message };
+    for (var vi = 0; vi < views.length && matches.length === 0; vi++) {
+      raw = views[vi];
+      if (opts.isRegex) {
+        var flags = 'g' + (opts.caseSensitive ? '' : 'i');
+        var re;
+        try {
+          re = new RegExp(opts.query, flags);
+        } catch (e) {
+          return { error: 'Invalid regex: ' + e.message };
+        }
+        var m;
+        var guard = 0;
+        while ((m = re.exec(raw)) && guard++ < 200) {
+          matches.push(m.index);
+          if (m[0].length === 0) re.lastIndex++;
+        }
+      } else {
+        var hay = opts.caseSensitive ? raw : raw.toLowerCase();
+        var needle = opts.caseSensitive ? opts.query : opts.query.toLowerCase();
+        matches = findAllMatches(hay, needle);
       }
-      var m;
-      var guard = 0;
-      while ((m = re.exec(raw)) && guard++ < 200) {
-        matches.push(m.index);
-        if (m[0].length === 0) re.lastIndex++;
-      }
-    } else {
-      var hay = opts.caseSensitive ? raw : raw.toLowerCase();
-      var needle = opts.caseSensitive ? opts.query : opts.query.toLowerCase();
-      matches = findAllMatches(hay, needle);
     }
     if (matches.length === 0) return null;
     var snippets = matches.slice(0, 20).map(function (idx) {
@@ -553,6 +617,7 @@
     { name: 'Code Repository / Paste Site', keywords: ['github.com', 'gitlab.com', 'bitbucket.org', 'pastebin.com', 'gist.github.com'] },
     { name: 'Email Security Link-Rewrite Service', keywords: ['proofpoint.com', 'safelinks.protection.outlook.com', 'barracudanetworks.com', 'cudasvc.com'] },
     { name: 'Communication / Meeting Platform', keywords: ['zoom.us', 'teams.microsoft.com', 'meet.google.com', 'webex.com', 'slack.com'] },
+    { name: 'Email Service Provider', keywords: ['sendgrid.net', 'amazonses.com', 'mailgun.org', 'mandrillapp.com', 'mcsv.net', 'rsgsv.net', 'mcdlv.net', 'sparkpostmail.com', 'postmarkapp.com', 'mailjet.com', 'sendinblue.com', 'brevo.com', 'constantcontact.com', 'createsend.com', 'hubspotemail.net', 'exacttarget.com', 'klaviyomail.com'] },
     { name: 'Suspicious / Free TLD', keywords: ['.xyz', '.top', '.click', '.link', '.zip', '.mov'] }
   ];
   EV.DEFAULT_DOMAIN_CATEGORIES = DEFAULT_DOMAIN_CATEGORIES;
@@ -671,7 +736,8 @@
     var from = addrFact(parsed.from[0]);
     var trustedDomains = opts.trustedDomains || [];
     var brandKeywords = EV.buildBrandKeywords(trustedDomains);
-    var bodyText = (parsed.textBody || '') + '\n' + EV.htmlToText(parsed.htmlBody || '');
+    var htmlTextValue = EV.htmlToText(parsed.htmlBody || '');
+    var bodyText = (parsed.textBody || '') + '\n' + htmlTextValue;
     var domainIsTrusted = from ? EV.ruleHelpers.isDomainTrusted(from.domain, trustedDomains) : false;
     var headerBlob = parsed.headers.map(function (h) { return h.value; }).join(' ');
     var attNamesBlob = parsed.attachments.map(function (a) { return a.filename; }).join(' ');
@@ -679,6 +745,7 @@
       [from ? from.domain : ''].concat(urlDomains, EV.extractDomainLikeTokens(headerBlob), EV.extractDomainLikeTokens(attNamesBlob)),
       opts.domainCategories
     );
+    var anomaliesResult = EV.analyzeAnomalies(parsed, { htmlText: htmlTextValue, urls: urls, internalDomains: opts.internalDomains, trustedDomains: opts.trustedDomains, domainCategories: opts.domainCategories });
 
     return {
       subject: parsed.subject || '',
@@ -711,6 +778,12 @@
       urgencyScore: EV.urgencyScore(bodyText),
       financialIndicators: EV.extractFinancialIndicators(bodyText),
       domainCategories: domainCategories,
+      // Security-card checklist results (see anomalies.js): the ids of every flagged/noted check, and the scripts found
+      anomalies: anomaliesResult.flags,
+      originIp: anomaliesResult.metrics.originIp || null,
+      connectingIp: anomaliesResult.metrics.connectingIp || null,
+      subjectScripts: anomaliesResult.subjectScripts,
+      bodyScripts: anomaliesResult.bodyScripts,
       getHeader: function (name) { return EV.getHeader(parsed.headers, String(name).toLowerCase()); },
       getHeaderAll: function (name) { return EV.getHeaderAll(parsed.headers, String(name).toLowerCase()); }
     };

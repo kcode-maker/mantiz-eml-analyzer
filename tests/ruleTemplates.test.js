@@ -14,6 +14,8 @@
  */
 var EV = {};
 this.EV = EV;
+load('js/parsing/headerTables.js');
+load('js/indexing/anomalies.js');
 load('js/indexing/indexLogic.js');
 load('js/rules/ruleTemplates.js');
 

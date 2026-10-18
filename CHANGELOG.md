@@ -105,6 +105,221 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   already-open tabs open (closing only ones for a file that no longer
   exists) rather than closing everything, unlike the same reload this
   app already used internally after Delete/Move/Copy.
+- **Reader pane redesigned as a glass bento grid** (Preview tab): the email
+  view is now a set of frosted-glass cards on an ultra-dark background —
+  Message (subject, From/To/Date), Security (SPF/DKIM/DMARC in emerald/red/
+  amber, urgency and financial Signals, Tags), Message body, Metadata, Links,
+  Blocked resources — arranged as a 12-column bento grid when the pane is wide
+  (metadata beside the body, no scrolling to reach it) and simply stacked when
+  it is narrow (driven by the pane's own width via a container query, not the
+  window). Built with plain CSS and a few new inline-SVG icons: no Tailwind,
+  no icon library, no CDN, no new dependency, nothing loaded from the network.
+  Pure layout — the same elements and code paths as before, only regrouped, so
+  every Preview feature (tags and their autocomplete, copy buttons, remote-
+  content toggle and blocked notice, calendar card, WHOIS, Scan URL, links
+  panel, collapsible sections) is unchanged; the other tabs (Headers, text/html
+  body, Attachments, Raw), the sidebars and Settings are untouched.
+- **Long content can no longer break the layout** (stress-tested with
+  hundreds of lines, a 3000px-wide table, unbreakable 250-character subjects
+  and tokens, 200-character display names and filenames, 30 recipients, 500-
+  character URLs, 2000-character headers, twelve 40-character tags): subjects,
+  addresses, metadata values, tag chips and attachment names now wrap inside
+  their card instead of pushing the reader pane sideways (a long subject used
+  to run off-screen and take the Copy button with it; a long attachment name
+  spilled out of its card). A very long or very wide email body scrolls inside
+  the body panel, and its scrollbars are now always visible (they used to
+  appear only while scrolling on macOS). Long names in the Explorer end in an
+  ellipsis with the full name on hover; tabs are capped at a sensible width the
+  same way; the rule editor's template dropdown no longer overflows its dialog.
+- **"Load remote images/content" is now one switch for every email** (was
+  per email): tick it once and all emails you open load remote content;
+  untick it in any email and all go back to blocked. Because that widens a
+  security decision, turning it on asks you to confirm, an amber "Remote
+  content: ON" chip stays in the status bar while it is on (click it to turn
+  it off), and it is held in memory only — a page reload or opening a different
+  folder resets it to off.
+- **Fix: "Load remote images/content" could not be ticked in some hosts**:
+  the tick asked for confirmation through the browser's native `confirm()`, which
+  some hosts (embedded browser panes in desktop apps) never show — it
+  returns "no" instantly, so every tick was silently cancelled. The app now has its own
+  confirm/alert dialogs (`js/ui/dialogs.js`) that work in every browser and host:
+  Esc cancels, Tab cycles between the buttons, the safe button is focused first,
+  and clicking outside cancels. They replace every native `confirm()` (remote
+  content, "Move emails to .deleted", "Delete rule" — the last two would have
+  silently done nothing there too) and all 27 native `alert()` messages (import
+  results, permission and failure notices, which were invisible in that pane).
+  Two messages in a row queue and are shown one after the other, and a
+  double-click can't stack two confirmations.
+- **Metadata card attachments are now laid out as aligned rows**: one row per
+  attachment with three columns — name, type (extension) and size (with an
+  "inline" note where it applies) — on one shared grid so they line up across
+  rows however long a name is; a long name wraps inside its own column.
+- **Click an attachment name to search for it**: each attachment in the Metadata
+  card is a clickable tag that runs `attachment.filename:"<name>"` (editable, e.g.
+  into `attachment.filename:/Inv-.*\.pdf$/i`). Also fixed: a regex on
+  `attachment.filename` (and the Use Regex toggle) used to run against all of an
+  email's filenames joined into one string, so `\.pdf$` missed an email whose PDF
+  wasn't its last attachment; it now tests each attachment name on its own, so
+  `^`/`$` anchor one filename. The indexer keeps each email's attachment names as
+  a list for this.
+- **Sender IPs, delay chart and hop table** (Headers tab, ideas from reviewing a header-analyzer
+  tool, reimplemented offline): the Received chain now shows the **IP that connected to the
+  receiving side** (newest public hop — recorded by the receiver, so the sender cannot forge it)
+  and the **earliest public IP** (what the sender's own hops claim), each with Copy; a **Where the
+  time went** bar chart (slowest gap named; days kept; negative gaps shown, not clamped to zero);
+  and **Copy hop table** (TSV). Searchable as `meta.connectingip:` / `meta.originip:`, available to
+  rules as `f.connectingIp` / `f.originIp`, shown in the Metadata card, and exported in the IOC CSV
+  (`connecting_ip` / `origin_ip`). Per-hop country lookup was deliberately NOT added: it needs a
+  licensed GeoIP database or a network call, against the standalone/offline rule.
+- **Code architecture**: `js/ui/app.js` (once a 2,800-line closure) is now a ~180-line composition
+  root; the app's features live in `js/ui/features/` (explorer, fileOps, tabsView, pages,
+  folderLocation, workspace, tagsPanel, settingsPage, rulesPanel, searchPanel, exportsPanel, session),
+  sharing one `ctx`; `render.js` hands its large views to `js/ui/email/` (securityCard,
+  headersView, attachmentsView); shared UI primitives are in `uiKit.js`/`overlays.js` and the
+  Settings lists the Preview reads are in `js/core/settingsCache.js`. No behaviour change.
+  `tests/test_structure.py` now enforces the standalone / OS-independent / architecture rules
+  (local-only scripts, allow-listed hosts, stdlib-only Python, no orphan modules, feature list
+  matches the folder, load order, features talk only through `ctx`).
+- **Fixed: the "Spaces are not allowed" tag note stuck on screen.** When a button (Tag file, Save
+  rule) submitted an invalid name, the box had already lost focus, so nothing ever hid the note.
+  It is now dismissed by any click or key outside the box, Escape, the box disappearing (bar
+  cleared, modal closed) and a 4-second timeout — and the box's own text scrolling while you
+  type no longer hides it early.
+- **Evasion checks, tuned against false positives**: a new **Attachments** row (executable
+  or script types, double extensions, a program disguised by its name via its first bytes,
+  macro-enabled files, disk images, spoofed names) and a **Sender domain** row (look-alike
+  letters imitating a trusted domain — punycode decoded, full-width folded — and bare-IP
+  senders); `bidi-override` for RTLO characters; CSS-hidden text now also catches
+  off-screen, 1px and white-on-white (same element). Hidden-character counting no longer
+  trips on ordinary mail (Arabic/Hebrew LRM/RLM, emoji and Persian joiners, German soft
+  hyphens, a leading BOM); any hidden character in a sender name or link host is flagged.
+  From / Return-Path / Reply-To are now compared **by organisation** (subdomains align) and
+  a Return-Path on a known mailing service (new default *Email Service Provider* category)
+  is a note instead of a flag.
+- **Security checks metric tiles + Folder overview**: four clickable tiles above the checklist
+  (hidden characters, look-alikes, envelope, attachments) and a bar-chart button that opens
+  a folder-wide overview — emails per flag, grouped, click to search. Four new sample emails
+  (`12-evasion-tricks`) demonstrate the techniques.
+- `attachment.ext:` accepts the extension with or without its dot (`exe` = `.exe`),
+  matching what the autocomplete already offered; the Move/Copy and Tag Deletion
+  dialogs can no longer be stacked by clicking their button repeatedly.
+- **Headers are shown decoded**: the Headers tab's *All headers* table (and its Copy
+  buttons) now decodes RFC 2047 encoded words in any charset (B/Q, split across words,
+  language tags, missing base64 padding), RFC 2231 parameters (charset, percent-encoding,
+  continuations) and raw UTF-8, with a "decoded" tag; the filter matches both forms and
+  the Raw tab is untouched. The same decoders fixed: a multi-byte character split across
+  two encoded words (also in Subject/From), non-UTF-8 RFC 2231 attachment filenames
+  (`filename*=iso-8859-1''…`), UTF-7 text (a filter-evasion trick), and a latent
+  double-decode of strings that were already Unicode.
+- **Full folder path, found automatically**: browsers never reveal where a picked
+  folder lives, so the local server (`scripts/serve.py`) finds it — the page sends the
+  folder's name plus a small fingerprint (some relative paths and sizes) to
+  `/__mantiz/locate-folder` and the server returns a path only when every fingerprinted
+  file exists there with the same size (`scripts/folder_locator.py`: Spotlight on macOS,
+  a bounded search elsewhere). No question is ever asked. The Explorer root, path bar,
+  status bar and **Copy path(s)** show the full path (plus **Copy relative path(s)**).
+  The endpoint accepts only same-origin requests from a loopback host.
+- **Internal / External sender** (Settings → Organization): with your own
+  domains configured, the Preview shows an Internal/External pill and the Security
+  checks flag `claims-internal` — your domain, first hop from an unrelated public
+  address, nothing authenticating it. Cloud mail that passes DMARC for your
+  domain, and Exchange `AuthAs: Internal`, stay internal (no false alarms).
+- **Inserted-header detection, strong evidence only**: `auth-results-conflict`
+  (one server wrote two disagreeing Authentication-Results) and
+  `auth-results-planted` (one sits below the oldest Received and names a server
+  no hop was received by). Weak signals (HELO/rDNS differences, odd dates,
+  private-IP hops) are intentionally not reported. Shown in the checklist and
+  above the Headers tab's Authentication results; searchable via `meta.flag:`.
+- **Sample emails now carry `Received` headers**, including a broken chain, backwards
+  timestamps, an inserted Authentication-Results and a spoofed internal sender.
+- Authentication-Results headers with no server id (Exchange Online style) are
+  parsed correctly instead of treating `spf=pass` as the server name.
+- `tests/run-all.sh` now also fails on `FAIL:`/`Exception:` lines — a promise-based
+  suite failing inside a `.then()` previously left jsc's exit status at 0.
+- **Headers tab redesigned into three sections**: a parsed **Authentication
+  results** table (SPF/DKIM/DMARC pills, comments and properties as chips), a
+  **Received chain** drawn from the sender (start point) through every hop to the
+  recipient, with a red broken-link symbol where two hops don't connect, an amber
+  marker for timestamps going backwards and the delay on each connector, and an
+  **All headers** table with a filter and per-row Copy. The Security checks row
+  gains `received-broken` (searchable as `meta.flag:received-broken`); chain
+  logic lives in one pure module, `js/parsing/headerTables.js`, shared by the tab,
+  the checklist and the search index.
+- **Security checks: a full Header / Body / Language checklist in the Preview**:
+  a new full-width card lists *every* check with ✓ / flag / note / not-applicable,
+  so you can see what was tested. **Header**: Reply-To and Return-Path domain
+  mismatch, Received-chain anomalies (none, timestamps going backwards, unusually
+  long), Message-ID missing or from an unrelated domain, forged display name
+  (an address inside the name that isn't the sender), duplicate From/Subject/Date…
+  headers, DKIM signed by another domain. **Body**: no text part / no HTML part /
+  empty body, image-only body, plain-text vs HTML disagreement, hidden content
+  (CSS-hidden text, zero-width characters), **threading** (genuine reply vs fake
+  "Re:" with no reply headers), and **mixed-script (homoglyph) words** in the
+  subject, sender name, body and link hosts, naming the odd letter's code point.
+  **Language**: the script of the subject and the body (LATIN, CYRILLIC, GREEK,
+  ARMENIAN, HAN…) plus a script-mismatch note — script only, by design, not a
+  language guess. Every flag is searchable via `meta.flag:<id>` (which now lists
+  all of them, with autocomplete) and the scripts via `script.subject:` /
+  `script.body:`; rules get `f.anomalies`, `f.subjectScripts`, `f.bodyScripts`.
+  One shared pure module (`js/indexing/anomalies.js`) so card, search and rules
+  cannot disagree; it adds about 0.09 ms per email to indexing (plain-ASCII text
+  takes a fast path).
+- **Metadata search (`meta.*`)**: the Metadata card's rows are now searchable —
+  `meta.fromdomain:`, `meta.replytodomain:`, `meta.returnpathdomain:`,
+  `meta.urldomain:`, `meta.category:`, plus `meta.flag:` (`replyto-mismatch`,
+  `returnpath-mismatch`, `name-mismatch`, `lookalike`, `punycode` — the same
+  definitions as the card's badges) and `meta.financial:` (iban, swift_bic,
+  routing_number, crypto wallets, gift_card_request). The domain fields match the
+  domain only, so `meta.fromdomain:paypal` finds `paypal.evil.net` but not a
+  display name that merely says "PayPal". The Metadata card itself stays plain
+  (only the attachment names are clickable). Autocomplete
+  suggests the field names, the flag/financial values and the folder's real
+  categories. The indexer now also records each email's Reply-To and
+  Return-Path domain and their mismatch flags. `url:` (link addresses, e.g.
+  `url:".pdf"`) already existed but was missing from the in-app help; it is
+  documented there now, and no second `links:` name was added.
+- **Click the Subject / From / To / Cc / Bcc / Reply-To tag to search for it**:
+  the field labels in the Message card are now clickable tags (the values next
+  to them stay plain, selectable text). A click fills the search box with the
+  query (`header.subject:"…"` / `header.from:"…"`), runs it as a Decoded search
+  (switching Raw mode and Use Regex off) and leaves the cursor in the box so you
+  can edit and re-search. A recipient line with several addresses searches for
+  any of them as an editable `(… OR …)` group. The subject also now has a
+  "Subject" label like From/To/Date. The query builders (`EV.searchQueryFor`,
+  `EV.searchQueryForAny`) are unit-tested end to end, including subjects with
+  quotes, parentheses, a capital OR, colons and double spaces (inner spacing is
+  kept, since the stored subject keeps it too).
+- **Links in an email: normal pointer, click copies**: the pointer over a
+  link was a "?" (the help cursor), which looked broken because clicking did
+  nothing. It is now a normal hand, and clicking a link copies its address
+  (a "✓ Link copied" confirmation in the hover bar) — it still never opens it.
+  Also: Firefox gets themed email-body scrollbars via a guarded fallback, and
+  the Windows "port already in use" helper no longer depends on Windows being
+  set to English (it matched the word LISTENING, which is translated).
+- **Link-hover bar**: hovering (or keyboard-focusing) a link in the email
+  body now shows its full real destination in a bar just above the status bar
+  — wrapped, never truncated to one line, and a red "⚠ Displayed text says …
+  — actual destination: …" form for a deceptive link. Before, only the browser's
+  own link bubble showed it, at the bottom-left over the status bar's text, and
+  cut long URLs short. Display only (`textContent`); nothing is fetched or opened.
+- **Autocomplete in the search box** (VS Code-style): type `head` and
+  get the matching fields; after `header.` the list includes the header
+  names actually present in your folder; accepting a field offers its
+  values where they're a fixed set (SPF/DKIM/DMARC results, the attachment
+  extensions in your folder, your tags, numeric examples). Tab accepts,
+  ↑/↓ choose, Esc closes, Ctrl+Space (or ↓) lists everything — and Enter
+  always searches unless you arrowed into the list, so a plain word search
+  is never hijacked. Off in Raw search, with Use Regex on, and inside an
+  open quote. Built on a pure, unit-tested suggestion function and a test
+  that fails if the suggestion list ever drifts from the real query grammar.
+- **Search any header by name, and by SPF/DKIM/DMARC result**:
+  `header.<name>:` works for every header (`header.received:`,
+  `header.x-mailer:`, `header.authentication-results:`, …) — the search
+  help panel lists the header names present in the open folder, and an
+  unknown name warns instead of silently matching nothing — and
+  `auth.spf:` / `auth.dkim:` / `auth.dmarc:` match the recorded result
+  exactly (`fail`, `pass`, `softfail`, `none`, or `missing`). A plain
+  search also covers all headers.
 - **Namespaced `header.*`/`attachment.*` search grammar** replacing the
   old flat field prefixes (`from:`, `to:`, `attachment:`, `attachments:`,
   `meta:`/`header:`) — a hard rename, see Changed below — plus five
@@ -174,6 +389,80 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `field:value` now parse identically; the value still stops at the next
   whitespace/paren exactly as before, so a multi-word value still needs
   quotes (`field: "two words"`), same as it always has.
+- **Searching for text inside a longer word/address/URL found nothing** —
+  reported live: `adobe` (or `header.from:adobe`) didn't find senders like
+  `message@adobe.com`, and a plain search didn't reach every part of an
+  email. Decoded search matched whole indexed words only, and an address or
+  dotted domain is one word. It now matches what you type as plain text
+  wherever it appears — subject, sender, recipients, body, links, every
+  header and OCR text, including Cyrillic/CJK/accented text the word
+  tokenizer can't index — by keeping each email's decoded text (lowercased)
+  in the index up to a fixed memory budget. Emails past the budget fall
+  back to whole-word matching and the search status line says how many are
+  covered; Raw search finds any substring regardless. Quoted phrases now
+  require real adjacency.
+- **Autocomplete for tag boxes and the rule expression editor**: the
+  per-email "+ add tag", the multi-select bar and the rule editor's tag box
+  suggest your existing tag names (never one an email already has). The rule
+  expression editor suggests `f.` facts (with types), `h.` helpers (with
+  signatures), nested members (`f.from.` → `name`/`address`/`domain`,
+  string/array methods), bare-word search (`cont` → `h.contains`), and the
+  folder's real header names inside `f.getHeader('…')`; Tab accepts and adds
+  the `(` for functions, Enter still inserts a newline. A test fails if the
+  fact or helper list ever drifts from the real rule engine.
+- **Tag names are validated**: lowercase `a-z`, `0-9`, `-` and `_` only,
+  1–40 characters, no spaces — checked live in every tag box (capitals are
+  lowercased as you type, anything else turns the box red with the reason)
+  and again on submit, rule save and import. Tags and rule tags saved by
+  earlier versions are converted automatically on first start (`Needs
+  Review` → `needs-review`, merging names that collide), and imports convert
+  old names the same way and report how many.
+- **Tags panel redesigned around one action bar**: the per-row "View
+  files" / "⋯" / "Delete tag" buttons are gone. Tick one or more tags and use
+  **View files**, **Un-Tag file**, **Tag Deletion** and **Copy / move / delete
+  emails…** above the list (one place for these actions — no duplicate
+  right-click menu). Works on several tags at once
+  (View files / file actions use "any of them", the same rule as the tree
+  filter). A multi-tag delete + undo is sequential, because a live test
+  showed two tags sharing an email record lose one tag when undone in parallel.
+- **A tag's or rule's emails listed in the Search tab no longer go stale**:
+  reported — after deleting a tag, Search still said `N email(s) tagged
+  "set1"`. That list now follows tag changes (Tag Deletion, Un-Tag file, a
+  rule being disabled): it shrinks to what still matches, or empties with
+  "No emails carry the tag … any more." A typed search is never altered by
+  tag changes.
+- **Tag Deletion dialog shows the numbers**: emails carrying the tag (and
+  how many are in the open folder) and rules that apply it (and how many are
+  enabled), per tag when several are ticked.
+- **A rule whose tag was deleted is switched off and blocked**: every rule
+  using a deleted tag is disabled automatically (kept, not deleted) and
+  cannot be enabled or run until it is edited to use a different tag — the
+  store refuses to enable it, the Rules panel disables its switch/Run now and
+  explains, and the editor says why. Saving it with the deleted tag name
+  is refused (an automatic "-2" suffix can't sneak past the block). Undo lifts
+  the block and re-enables the rules that were running.
+- **Tag Deletion, redesigned** (and the three actions named plainly: **Tag
+  file** / **Un-Tag file** / **Tag Deletion**, so "remove" and "delete" are
+  never confused): each tag in the Tags panel shows its email
+  count; **Tag Deletion** opens a dialog with the exact count, offers to also
+  disable a rule that would re-add the tag, and a toast gives an 8-second
+  **Undo** that restores the tag on exactly the emails that had it (and
+  re-enables the rule). New **Un-Tag file** button in the multi-select bar
+  untags just the selected emails (a rule-applied tag is reported, not
+  silently skipped).
+- **Decoded search accuracy**: HTML entities (named, numeric, Windows-1252
+  quirks) are decoded before indexing; punycode hostnames are also
+  searchable by their Unicode name; zero-width/soft-hyphen characters
+  inserted to dodge keyword filters are ignored; `header.from:`/`to:`/`cc:`/
+  `bcc:`/`replyto:` also match the decoded display name. Raw search now finds
+  non-ASCII (UTF-8) text as stored instead of only ASCII.
+- **The local server no longer lingers after you close the app**: reported
+  as needing a manual `kill` before re-running `run.sh`. The page now sends
+  a small same-origin "still open" ping (localhost only), and
+  `scripts/serve.py` exits a few seconds after the last tab closes (about
+  2.5 minutes if the browser died without saying goodbye). `Ctrl+C`
+  still works; `--keep-running` opts out. The "address already in use"
+  error now names the PID and the exact command to stop it.
 - **The "↻ Resume '…'" toolbar button showed a permanently stale folder
   name** — reported live as always showing an old folder ("healthcare_themed")
   no matter what was opened afterward, even in the same browser tab. It's

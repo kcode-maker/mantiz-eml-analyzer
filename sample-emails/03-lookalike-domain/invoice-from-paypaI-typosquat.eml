@@ -1,3 +1,5 @@
+Received: from relay.bulk-mailer.example (relay.bulk-mailer.example [203.0.113.40]) by mx.example-corp.com with ESMTPS id 2D83AA; Wed, 17 Jan 2024 11:45:09 +0000
+Received: from webhost.bulk-mailer.example (webhost.bulk-mailer.example [203.0.113.41]) by relay.bulk-mailer.example with ESMTP id 91E5; Wed, 17 Jan 2024 11:45:04 +0000
 From: "Billing Department" <billing@paypaI.com>
 To: accounts-payable@example-corp.com
 Subject: Invoice #48213 attached

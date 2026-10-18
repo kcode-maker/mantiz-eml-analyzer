@@ -54,6 +54,34 @@
       return put('trustedDomains', { domains: defaults }).then(function (r) { return r.domains; });
     },
 
+    /** Where scripts/serve.py last found a folder of this name on disk -- only a HINT it tries first next time (and is re-verified
+     * every time, so a moved folder is never shown at its old place). Browsers never reveal it; see js/core/folderPath.js. */
+    folderLocation: function (name) {
+      return rawGet('folderLocations').then(function (rec) {
+        var map = (rec && rec.map) || {};
+        return Object.prototype.hasOwnProperty.call(map, name) ? map[name] : undefined;
+      });
+    },
+    setFolderLocation: function (name, path) {
+      return rawGet('folderLocations').then(function (rec) {
+        var map = Object.assign({}, (rec && rec.map) || {});
+        if (path === undefined) delete map[name]; else map[name] = String(path);
+        var keys = Object.keys(map);
+        if (keys.length > 200) delete map[keys[0]]; // bounded: oldest entry goes first
+        return put('folderLocations', { map: map });
+      }).then(function () { return path; });
+    },
+
+    /** The organization's OWN domains (a domain also covers its subdomains): used to tell internal mail from external and to
+     * catch an outside sender using one of them. Empty until the user sets it -- nothing is guessed. */
+    internalDomains: function () {
+      return rawGet('internalDomains').then(function (rec) { return rec && Array.isArray(rec.domains) ? rec.domains : []; });
+    },
+    setInternalDomains: function (list) {
+      var cleaned = Array.from(new Set((list || []).map(function (d) { return String(d).trim().toLowerCase().replace(/^@/, ''); }).filter(function (d) { return /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(d) && d.indexOf('.') !== -1 && d.indexOf('..') === -1; })));
+      return put('internalDomains', { domains: cleaned }).then(function (r) { return r.domains; });
+    },
+
     /**
      * "What type of domain is this?" categories (CDN, URL shortener, payment processor, ...), each a
      * {name, keywords} pair — checked against sender/reply-to/return-path, every URL domain, and

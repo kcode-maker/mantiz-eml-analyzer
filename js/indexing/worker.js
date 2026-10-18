@@ -3,7 +3,7 @@
  * lives in indexLogic.js (shared with the main-thread fallback path) so
  * behavior is identical whether or not Workers are available.
  */
-importScripts('../parsing/emlParser.js', '../parsing/urlExtract.js', 'indexLogic.js');
+importScripts('../parsing/emlParser.js', '../parsing/urlExtract.js', '../parsing/headerTables.js', 'anomalies.js', 'indexLogic.js');
 
 self.onmessage = async function (e) {
   var msg = e.data;

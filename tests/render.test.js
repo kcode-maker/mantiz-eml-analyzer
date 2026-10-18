@@ -12,8 +12,13 @@
  */
 var EV = {};
 this.EV = EV;
-EV.settings = { domainCategories: function () { return Promise.resolve([]); } };
+EV.settings = { domainCategories: function () { return Promise.resolve([]); }, internalDomains: function () { return Promise.resolve([]); }, trustedDomains: function () { return Promise.resolve([]); } };
 
+load('js/core/settingsCache.js');
+load('js/ui/uiKit.js');
+load('js/ui/email/securityCard.js');
+load('js/ui/email/headersView.js');
+load('js/ui/email/attachmentsView.js');
 load('js/ui/render.js');
 
 var pass = 0, fail = 0;

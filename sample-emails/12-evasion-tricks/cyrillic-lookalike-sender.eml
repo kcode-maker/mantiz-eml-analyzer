@@ -1,0 +1,11 @@
+Received: from mail.xn--l-7sba6dbr.com (mail.xn--l-7sba6dbr.com [198.51.100.202]) by mx.example-corp.com with ESMTPS id 8A1F04; Thu, 25 Jan 2024 11:30:05 +0000
+From: "Security Team" <service@xn--l-7sba6dbr.com>
+To: victim@example-corp.com
+Subject: Confirm your account
+Date: Thu, 25 Jan 2024 11:30:00 +0000
+Message-ID: <lookalike-1@xn--l-7sba6dbr.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+The sender domain is written with Cyrillic letters that look exactly like
+"paypal" (it arrives here in punycode form, xn--...). Confirm your account today.

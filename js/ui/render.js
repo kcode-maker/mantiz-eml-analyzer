@@ -6,92 +6,16 @@
 (function (g) {
   'use strict';
   var EV = g.EV || (g.EV = {});
+  EV.ui = EV.ui || {};
+  // Shared DOM helpers (js/ui/uiKit.js) and the cached Settings lists (js/core/settingsCache.js).
+  var el = EV.ui.el, fmtBytes = EV.ui.fmtBytes, fmtAddr = EV.ui.fmtAddr, copyBtn = EV.ui.copyBtn, downloadBlob = EV.ui.downloadBlob;
 
-  // The Preview tab's Metadata panel is rendered synchronously, but the domain-categories list is
-  // Settings-backed (async, IndexedDB). Cached here and refreshed once at load and whenever the
-  // Settings page saves a change (EV.refreshDomainCategoriesCache, called from app.js) rather than
-  // doing an async round-trip on every single render.
-  var cachedDomainCategories = [];
-  function refreshDomainCategoriesCache() {
-    return EV.settings.domainCategories().then(function (categories) { cachedDomainCategories = categories; });
-  }
-  EV.refreshDomainCategoriesCache = refreshDomainCategoriesCache;
-  refreshDomainCategoriesCache();
 
   var FINANCIAL_INDICATOR_LABELS = {
     iban: 'IBAN', swift_bic: 'SWIFT/BIC code', routing_number: 'Bank routing number',
     crypto_wallet_btc: 'BTC wallet address', crypto_wallet_eth: 'ETH wallet address',
     gift_card_request: 'Gift card request'
   };
-
-  function el(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
-  }
-
-  function fmtBytes(n) {
-    if (n == null) return '?';
-    if (n < 1024) return n + ' B';
-    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
-    return (n / (1024 * 1024)).toFixed(2) + ' MB';
-  }
-
-  function fmtAddr(a) {
-    return a.name ? a.name + ' <' + a.address + '>' : a.address;
-  }
-
-  function copyBtn(getText, label) {
-    var b = el('button', 'ev-mini-btn', label || 'Copy');
-    b.onclick = function () {
-      navigator.clipboard && navigator.clipboard.writeText(getText()).catch(function () {});
-      b.textContent = 'Copied!';
-      setTimeout(function () { b.textContent = label || 'Copy'; }, 1200);
-    };
-    return b;
-  }
-
-  function downloadBlob(bytes, filename, mime) {
-    var blob = new Blob([bytes], { type: mime || 'application/octet-stream' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
-  }
-
-  async function sha256Hex(bytes) {
-    if (!g.crypto || !g.crypto.subtle) return null;
-    try {
-      var digest = await g.crypto.subtle.digest('SHA-256', bytes);
-      var arr = Array.from(new Uint8Array(digest));
-      return arr.map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
-    } catch (e) {
-      return null;
-    }
-  }
-  // Exported so app.js's bulk "Extract OCR (selected)" action can hash an attachment it
-  // never renders a card for, using the exact same hashing this tab's own Attachments-tab
-  // hash display/OCR cache already relies on -- one implementation, not a second copy.
-  EV.sha256Hex = sha256Hex;
-
-  /** The same "first meaningful image" rule renderAttachments uses for its OCR button:
-   * an image, under the 8MB preview cap, over a tiny-tracking-pixel size floor -- inline or
-   * regular attachment alike (see the comment at the OCR-button call site below for why).
-   * Exported so app.js's bulk OCR action picks the exact same attachment a per-email click
-   * would have, instead of drifting from it as a second, separately-maintained rule. */
-  function pickFirstMeaningfulImageAttachment(attachments) {
-    for (var i = 0; i < (attachments || []).length; i++) {
-      var att = attachments[i];
-      if (/^image\//.test(att.mimeType) && att.size < 8 * 1024 * 1024 && att.size > 512) return att;
-    }
-    return null;
-  }
-  EV.pickFirstMeaningfulImageAttachment = pickFirstMeaningfulImageAttachment;
 
   // ---------- security signals ----------
 
@@ -228,7 +152,7 @@
    * writing a rule — domains, mismatches, attachment/URL summaries.
    */
   function renderMetadataPanel(p) {
-    var facts = EV.buildRuleFacts(p, { domainCategories: cachedDomainCategories });
+    var facts = EV.buildRuleFacts(p, { domainCategories: EV.settingsCache.domainCategories(), trustedDomains: EV.settingsCache.trustedDomains() });
     var wrap = el('div', 'ev-metadata-panel');
 
     function row(label, valueEl) {
@@ -264,15 +188,33 @@
     } else {
       row('From domain', null);
     }
-    row('Recipients', String(facts.recipientCount) + (facts.recipientCount > 1 ? ' (To/Cc/Bcc, deduplicated)' : ''));
+    row('Recipients (Count)', String(facts.recipientCount) + (facts.recipientCount > 1 ? ' (To/Cc/Bcc, deduplicated)' : ''));
     if (facts.replyTo) row('Reply-To domain', domainWithBadge(facts.replyTo, facts.from, 'From/Reply-To'));
     if (facts.returnPath) row('Return-Path domain', domainWithBadge(facts.returnPath, facts.from, 'From/Return-Path'));
+    if (facts.connectingIp) {
+      var ipWrap = el('span', 'ev-ip-line');
+      ipWrap.appendChild(el('span', 'ev-ip-val', facts.connectingIp));
+      ipWrap.appendChild(copyBtn(function () { return facts.connectingIp; }, 'Copy'));
+      if (facts.originIp && facts.originIp !== facts.connectingIp) ipWrap.appendChild(el('span', 'ev-muted-small', ' (earliest public IP in the chain: ' + facts.originIp + ')'));
+      row('Connecting IP', ipWrap);
+    }
 
     if (facts.attachmentCount) {
       var list = el('div', 'ev-meta-attachment-list');
+      // One row per attachment, as three aligned columns: name | type | size (the list is one shared grid, so the
+      // columns line up across rows however long a name is; a long name wraps inside its own column).
       facts.attachments.forEach(function (a) {
-        list.appendChild(el('div', 'ev-meta-attachment-item',
-          a.filename + '  —  ' + (a.ext || 'no ext') + ', ' + fmtBytes(a.size) + (a.isInline ? ' (inline)' : '')));
+        var item = el('div', 'ev-meta-attachment-item', null); // display: contents -- its 3 cells are grid cells of the list
+        var nameCell = el('span', 'ev-att-name', null);
+        var q = a.filename ? EV.searchQueryFor('attachment.filename', a.filename) : '';
+        // The name is a clickable tag: it searches every email with an attachment of that name (the query stays
+        // editable in the search box, e.g. turn it into attachment.filename:/Inv-.*\.pdf$/i).
+        if (q) nameCell.appendChild(searchTag(a.filename, q, 'Search all emails with an attachment named like this'));
+        else nameCell.textContent = a.filename || '(unnamed)';
+        item.appendChild(nameCell);
+        item.appendChild(el('span', 'ev-att-ext', a.ext || 'no ext'));
+        item.appendChild(el('span', 'ev-att-size', fmtBytes(a.size) + (a.isInline ? ' · inline' : '')));
+        list.appendChild(item);
       });
       row('Attachments (' + facts.attachmentCount + ')', list);
     } else {
@@ -387,14 +329,21 @@
     var input = el('input', 'ev-tag-input');
     input.type = 'text';
     input.placeholder = '+ add tag';
+    input.title = 'Lowercase a\u2013z, 0\u20139, - and _ only. Press Enter to add.';
     wrap.appendChild(chips);
     wrap.appendChild(input);
     host.appendChild(wrap);
+    var currentTags = [];
+    // Existing tag names as you type (skipping ones this email already has); app.js provides the list.
+    if (EV.searchSuggest && EV.searchSuggest.attachTagInput) {
+      EV.searchSuggest.attachTagInput(input, function () { return g.EV.getTagNames ? g.EV.getTagNames() : []; }, function () { return currentTags; });
+    }
 
     function refresh() {
       EV.tags.get(id).then(function (rec) {
         chips.innerHTML = '';
         var list = (rec && rec.tags) || [];
+        currentTags = list;
         list.forEach(function (t) {
           var chip = el('span', 'ev-tag-chip', t);
           chip.style.background = EV.tagColor(t);
@@ -405,14 +354,17 @@
         });
       });
     }
+    var tagCheck = EV.tagInput ? EV.tagInput.bind(input) : null;
     input.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && input.value.trim()) {
-        EV.tags.addTag(id, input.value.trim()).then(function () {
-          input.value = '';
-          refresh();
-          if (g.EV.onTagsChanged) g.EV.onTagsChanged();
-        });
-      }
+      if (e.key !== 'Enter' || !input.value.trim()) return;
+      var name = tagCheck ? tagCheck.check() : input.value.trim();
+      if (!name) return; // invalid: the box says why
+      EV.tags.addTag(id, name).then(function () {
+        input.value = '';
+        if (tagCheck) tagCheck.reset();
+        refresh();
+        if (g.EV.onTagsChanged) g.EV.onTagsChanged();
+      }).catch(function () { /* addTag only rejects an invalid name, already reported above */ });
     });
     refresh();
   }
@@ -431,39 +383,207 @@
     });
   }
 
+  // ---------- remote content: ONE switch for every email ----------
+  // Off by default. Turning it on applies to every email you open afterwards (each tab re-renders when you
+  // switch to it, so they all follow), turning it off applies to all again. It lives in memory only: a page
+  // reload, or opening a different folder (app.js calls reset), puts it back to the safe default. The
+  // status bar shows a standing "Remote content: ON" chip while it is on, because loading remote content
+  // tells a sender you opened their message.
+  var remoteContentOn = false;
+  var remoteConfirmPending = false; // a double-click must not queue two confirmations
+  EV.remoteContent = {
+    isOn: function () { return remoteContentOn; },
+    set: function (on) {
+      on = !!on;
+      if (on === remoteContentOn) return;
+      remoteContentOn = on;
+      if (typeof EV.remoteContent.onChange === 'function') EV.remoteContent.onChange(on);
+    },
+    onChange: null
+  };
+
+  // ---------- click a Subject / From / To ... to search for it ----------
+  /** Builds a decoded-search query for "everything with this value in `field`" (e.g. header.subject). The query
+   * grammar has no escape for a double quote inside a quoted phrase, so the value is split at any quote and the
+   * pieces are ANDed -- always a valid query, and easy to edit afterwards. Returns '' for an empty value. */
+  function queryPieces(field, value) {
+    // Inner spacing is kept exactly as in the email (the stored subject keeps it too, so collapsing runs of
+    // spaces would make the search miss the very email that was clicked); only line breaks/tabs become spaces
+    // (a search box is one line) and the ends are trimmed.
+    return String(value == null ? '' : value).split('"').map(function (s) { return s.replace(/[\r\n\t]/g, ' ').trim(); })
+      .filter(function (s) { return s; }).map(function (s) { return field + ':"' + s + '"'; });
+  }
+  EV.searchQueryFor = function (field, value) { return queryPieces(field, value).join(' '); };
+
+  /** "Any of these values" in `field` (a To/Cc list): one value is just that query; several become an editable
+   * `(a OR b OR c)` group. Empty values are skipped; no usable value gives ''. */
+  EV.searchQueryForAny = function (field, values) {
+    var parts = [];
+    (values || []).forEach(function (v) {
+      var pcs = queryPieces(field, v);
+      if (pcs.length) parts.push(pcs.length > 1 ? '(' + pcs.join(' ') + ')' : pcs[0]);
+    });
+    if (!parts.length) return '';
+    return parts.length === 1 ? parts[0] : '(' + parts.join(' OR ') + ')';
+  };
+
+  /** A field label ("Subject", "From", "To"...) as a small clickable tag that hands `query` to the Search tab
+   * (app.js's EV.searchFor), which fills the search box and runs it; the query stays editable there. The value
+   * next to it stays plain, selectable text. */
+  function searchTag(label, query, title) {
+    var b = el('button', 'ev-search-tag', null);
+    b.appendChild(EV.iconEl('magnifier', 'ev-search-tag-icon', 10));
+    b.appendChild(document.createTextNode(label));
+    b.type = 'button';
+    b.title = title + '\n(' + query + ')';
+    b.onclick = function () { if (query && typeof EV.searchFor === 'function') EV.searchFor(query); };
+    return b;
+  }
+
+  // ---------- link-hover bar ----------
+  // Hovering (or keyboard-focusing) a link in the email body shows its REAL destination in a bar just above
+  // the status bar, in full and wrapped, instead of relying on the browser's own link bubble (which sits at
+  // the bottom-left, over the status bar's text, and cuts long URLs short). Display only: textContent, never
+  // innerHTML, and nothing is fetched or opened (the standing "never follow a link" rule).
+  var linkBar = null;
+  function getLinkBar() {
+    if (linkBar) return linkBar;
+    linkBar = el('div', 'ev-link-hover-bar');
+    linkBar.setAttribute('role', 'status');
+    linkBar.style.display = 'none';
+    document.body.appendChild(linkBar);
+    return linkBar;
+  }
+  function hideLinkBar() { if (linkBar) linkBar.style.display = 'none'; }
+  EV.hideLinkHoverBar = hideLinkBar;
+  function showLinkBar(a) {
+    var bar = getLinkBar();
+    var mismatch = a.classList.contains('ev-link-mismatch');
+    bar.className = 'ev-link-hover-bar' + (mismatch ? ' mismatch' : '');
+    // sanitize.js already put the real destination (and, for a deceptive link, what the text claimed) in title
+    bar.textContent = (mismatch ? '\u26A0 ' : '\u2192 ') + (a.getAttribute('title') || a.getAttribute('href') || '');
+    bar.appendChild(el('span', 'ev-link-hover-hint', '   \u2014 click to copy the link'));
+    bar.style.display = ''; // CSS decides (a clamped box)
+  }
+  /** Clicking a link COPIES its address; it never opens it. (The body is sandboxed and could not open it
+   * anyway, so a "link" cursor with a dead click felt broken.) Tries the iframe's clipboard first, since that
+   * is the focused document after a click inside it, then the page's. */
+  function copyLinkAddress(iframe, a) {
+    var href = a.getAttribute('href') || '';
+    function done(ok) {
+      var bar = getLinkBar();
+      bar.className = 'ev-link-hover-bar' + (ok ? ' copied' : ' mismatch');
+      bar.textContent = ok ? '\u2713 Link copied to clipboard: ' + href : 'Could not copy automatically \u2014 select the link in the Links panel below.';
+      bar.style.display = '';
+    }
+    function viaPage() {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(href).then(function () { done(true); }, function () { done(false); });
+      else done(false);
+    }
+    try {
+      var cw = iframe.contentWindow;
+      if (cw && cw.navigator && cw.navigator.clipboard && cw.navigator.clipboard.writeText) {
+        cw.navigator.clipboard.writeText(href).then(function () { done(true); }, viaPage);
+        return;
+      }
+    } catch (e) { /* fall through */ }
+    viaPage();
+  }
+
+  function attachLinkHover(iframe) {
+    iframe.addEventListener('load', function () {
+      var doc = iframe.contentDocument;
+      if (!doc) return;
+      // Never navigate (the sandbox already refuses); copy instead. Covers click, Enter on a focused link
+      // (which fires a click) and middle-click.
+      doc.addEventListener('click', function (e) { var a = e.target && e.target.closest ? e.target.closest('a[href]') : null; if (a) { e.preventDefault(); copyLinkAddress(iframe, a); } });
+      doc.addEventListener('auxclick', function (e) { var a = e.target && e.target.closest ? e.target.closest('a[href]') : null; if (a) e.preventDefault(); });
+      function linkOf(e) { return e.target && e.target.closest ? e.target.closest('a[href]') : null; }
+      doc.addEventListener('mouseover', function (e) { var a = linkOf(e); if (a) showLinkBar(a); });
+      doc.addEventListener('mouseout', function (e) { if (linkOf(e)) hideLinkBar(); });
+      doc.addEventListener('focusin', function (e) { var a = linkOf(e); if (a) showLinkBar(a); });
+      doc.addEventListener('focusout', function (e) { if (linkOf(e)) hideLinkBar(); });
+      doc.addEventListener('scroll', hideLinkBar, true);
+    });
+    iframe.addEventListener('mouseleave', hideLinkBar);
+  }
+
+  /** One glass card of the Preview bento grid. `kind` is 'details' for a collapsible card (its title is the
+   * <summary>), else a plain section. Pure layout: callers append the SAME elements they always built. */
+  function bentoCard(cls, iconName, title, kind) {
+    var collapsible = kind === 'details';
+    var root = el(collapsible ? 'details' : 'section', 'ev-card ' + cls);
+    var header = el(collapsible ? 'summary' : 'div', 'ev-card-title');
+    header.appendChild(EV.iconEl(iconName, 'ev-card-icon', 14));
+    header.appendChild(el('span', null, title));
+    root.appendChild(header);
+    var body = el('div', 'ev-card-body');
+    root.appendChild(body);
+    return { root: root, header: header, body: body };
+  }
+
   function renderPreview(tab, container) {
     ensureInlineBlobUrls(tab);
     var p = tab.parsed;
     container.innerHTML = '';
 
-    var head = el('div', 'ev-preview-head');
+    // Bento grid: Message + Security on top, body beside the metadata, then links/blocked/attachments.
+    var bentoWrap = el('div', 'ev-bento-wrap');
+    var bento = el('div', 'ev-bento');
+    bentoWrap.appendChild(bento);
+    container.appendChild(bentoWrap);
+    var msgCard = bentoCard('ev-card-msg', 'mail', 'Message');
+    var secCard = bentoCard('ev-card-sec', 'shield', 'Security');
+    var checksCard = bentoCard('ev-card-checks', 'shield', 'Security checks');
+    bento.appendChild(msgCard.root);
+    bento.appendChild(secCard.root);
+    bento.appendChild(checksCard.root);
+    EV.ui.renderSecurityChecks(checksCard, p);
+
+    var subjectLabel = el('div', 'ev-card-sub', p.subject ? null : 'Subject');
+    if (p.subject) subjectLabel.appendChild(searchTag('Subject', EV.searchQueryFor('header.subject', p.subject), 'Search all emails with this subject'));
+    msgCard.body.appendChild(subjectLabel);
     var subjectRow = el('div', 'ev-subject');
     subjectRow.appendChild(el('span', null, p.subject || '(no subject)'));
     subjectRow.appendChild(copyBtn(function () { return p.subject || ''; }, 'Copy'));
-    head.appendChild(subjectRow);
+    msgCard.body.appendChild(subjectRow);
+    var origin = EV.classifyOrigin(p, EV.settingsCache.internalDomains());
+    if (origin.state !== 'unconfigured') {
+      var ORIGIN_PILL = { internal: ['Internal', 'ok'], external: ['External', 'ext'], unverified: ['Internal domain \u2014 path unverified', 'note'], 'claims-internal': ['Claims to be internal \u2014 came from outside', 'flag'] };
+      var pill = el('span', 'ev-origin-pill ev-origin-' + ORIGIN_PILL[origin.state][1], ORIGIN_PILL[origin.state][0]);
+      pill.title = origin.detail;
+      var pillRow = el('div', 'ev-origin-row'); pillRow.appendChild(pill);
+      msgCard.body.appendChild(pillRow);
+    }
 
     var meta = el('div', 'ev-meta-grid');
-    function metaRow(label, value) {
+    // For address rows the LABEL is a clickable tag: it searches `field` for any of the row's addresses.
+    function metaRow(label, value, addrs, field, what) {
       if (!value) return;
       var r = el('div', 'ev-meta-row');
-      r.appendChild(el('div', 'ev-meta-label', label));
+      var labelEl = el('div', 'ev-meta-label', null);
+      var query = addrs ? EV.searchQueryForAny(field, addrs.map(function (a) { return a.address || a.name || ''; })) : '';
+      if (query) labelEl.appendChild(searchTag(label, query, 'Search all emails with ' + (addrs.length > 1 ? 'any of these ' + what + 's' : 'this ' + what)));
+      else labelEl.textContent = label;
+      r.appendChild(labelEl);
       r.appendChild(el('div', 'ev-meta-value', value));
       r.appendChild(copyBtn(function () { return value; }, 'Copy'));
       meta.appendChild(r);
     }
-    metaRow('From', p.from.map(fmtAddr).join(', '));
-    metaRow('To', p.to.map(fmtAddr).join(', '));
-    metaRow('Cc', p.cc.map(fmtAddr).join(', '));
-    metaRow('Bcc', p.bcc.map(fmtAddr).join(', '));
+    metaRow('From', p.from.map(fmtAddr).join(', '), p.from, 'header.from', 'sender');
+    metaRow('To', p.to.map(fmtAddr).join(', '), p.to, 'header.to', 'recipient');
+    metaRow('Cc', p.cc.map(fmtAddr).join(', '), p.cc, 'header.cc', 'Cc recipient');
+    metaRow('Bcc', p.bcc.map(fmtAddr).join(', '), p.bcc, 'header.bcc', 'Bcc recipient');
     metaRow('Date', p.date ? p.date.toString() : p.dateRaw);
-    metaRow('Reply-To', p.replyTo.map(fmtAddr).join(', '));
-    head.appendChild(meta);
+    metaRow('Reply-To', p.replyTo.map(fmtAddr).join(', '), p.replyTo, 'header.replyto', 'Reply-To address');
+    msgCard.body.appendChild(meta);
 
+    secCard.body.appendChild(el('div', 'ev-card-sub', 'Authentication'));
     var authRow = el('div', 'ev-auth-row');
     authRow.appendChild(authBadge('SPF', p.authSummary.spf));
     authRow.appendChild(authBadge('DKIM', p.authSummary.dkim));
     authRow.appendChild(authBadge('DMARC', p.authSummary.dmarc));
-    head.appendChild(authRow);
+    secCard.body.appendChild(authRow);
 
     // Always-on local signals (urgency-language score, financial indicators) -- computed here,
     // not read off a search-index cache, since this tab may be open on a file the index hasn't
@@ -473,6 +593,7 @@
     var urgencyScore = EV.urgencyScore(signalBodyText);
     var financialIndicators = EV.extractFinancialIndicators(signalBodyText);
     if (urgencyScore > 0 || financialIndicators.length > 0) {
+      secCard.body.appendChild(el('div', 'ev-card-sub', 'Signals'));
       var signalsRow = el('div', 'ev-signals-row');
       if (urgencyScore > 0) {
         var urgencyBadge = el('span', 'ev-signal-badge ev-signal-urgency', 'Urgency language: ' + urgencyScore);
@@ -482,32 +603,53 @@
       financialIndicators.forEach(function (type) {
         signalsRow.appendChild(el('span', 'ev-signal-badge ev-signal-financial', FINANCIAL_INDICATOR_LABELS[type] || type));
       });
-      head.appendChild(signalsRow);
+      secCard.body.appendChild(signalsRow);
     }
 
     var icsInvite = findParsedCalendarInvite(p);
-    if (icsInvite) head.appendChild(renderCalendarCard(icsInvite));
+    if (icsInvite) msgCard.body.appendChild(renderCalendarCard(icsInvite));
 
-    renderTagEditor(tab, head);
+    secCard.body.appendChild(el('div', 'ev-card-sub', 'Tags'));
+    renderTagEditor(tab, secCard.body);
 
+    var bodyCard = bentoCard('ev-card-reader', 'file', 'Message body');
+    bento.appendChild(bodyCard.root);
     var toolbar = el('div', 'ev-preview-toolbar');
     var remoteLabel = el('label', 'ev-remote-toggle');
     var remoteCheckbox = document.createElement('input');
     remoteCheckbox.type = 'checkbox';
-    remoteCheckbox.checked = tab.allowRemote;
+    remoteCheckbox.checked = remoteContentOn;
     remoteCheckbox.onchange = function () {
-      tab.allowRemote = remoteCheckbox.checked;
-      renderPreview(tab, container);
+      if (!remoteCheckbox.checked) { // turning it off needs no confirmation
+        EV.remoteContent.set(false);
+        renderPreview(tab, container);
+        return;
+      }
+      remoteCheckbox.checked = false; // stays off until confirmed (an in-app dialog: native confirm() is not shown in every host)
+      if (remoteConfirmPending) return;
+      remoteConfirmPending = true;
+      EV.confirmDialog({
+        title: 'Load remote content for all emails?',
+        message: 'Senders can see that you opened their message (tracking pixels, your IP address).\n\n' +
+          'It stays on for every email you open until you untick it, open a different folder, or reload the page.',
+        confirmLabel: 'Load for all emails'
+      }).then(function (ok) {
+        remoteConfirmPending = false;
+        if (!ok) return;
+        remoteCheckbox.checked = true;
+        EV.remoteContent.set(true);
+        renderPreview(tab, container);
+      });
     };
     remoteLabel.appendChild(remoteCheckbox);
-    remoteLabel.appendChild(document.createTextNode(' Load remote images/content (off by default for safety)'));
+    remoteLabel.appendChild(document.createTextNode(remoteContentOn
+      ? ' Load remote images/content \u2014 ON for all emails (untick to turn off for all)'
+      : ' Load remote images/content (off by default for safety; ticking applies to all emails)'));
     toolbar.appendChild(remoteLabel);
     if (p.textBody || p.htmlBody) {
       toolbar.appendChild(copyBtn(function () { return p.textBody || EV.htmlToText(p.htmlBody); }, 'Copy body text'));
     }
-    head.appendChild(toolbar);
-
-    container.appendChild(head);
+    bodyCard.body.appendChild(toolbar);
 
     var bodyWrap = el('div', 'ev-body-wrap');
     var iframe = document.createElement('iframe');
@@ -518,12 +660,14 @@
     // together mean this grant carries no meaningful risk (see ARCHITECTURE.md's Security model).
     iframe.setAttribute('sandbox', 'allow-same-origin');
     iframe.setAttribute('referrerpolicy', 'no-referrer');
+    attachLinkHover(iframe);
+    hideLinkBar(); // a re-render (or another tab) must never leave a stale URL showing
     var sanitized;
     var links = [];
     var blockedUrls = [];
     var blockedCount = 0;
     if (p.htmlBody) {
-      sanitized = EV.sanitizeEmailHtml(p.htmlBody, p.attachments, { allowRemote: tab.allowRemote });
+      sanitized = EV.sanitizeEmailHtml(p.htmlBody, p.attachments, { allowRemote: remoteContentOn });
       links = sanitized.links || [];
       blockedUrls = sanitized.blockedRemoteUrls || [];
       blockedCount = blockedUrls.length;
@@ -535,15 +679,15 @@
       iframe.srcdoc = EV.plainTextToSafeHtml('(This message has no readable text or HTML body.)');
     }
     bodyWrap.appendChild(iframe);
-    container.appendChild(bodyWrap);
+    bodyCard.body.appendChild(bodyWrap);
 
     if (blockedCount) {
       var notice = el('div', 'ev-blocked-notice',
         blockedCount + ' remote resource(s) blocked — hover a placeholder in the body, or see the list below for the URLs. ');
-      var showBtn = el('button', 'ev-mini-btn', 'Load anyway');
-      showBtn.onclick = function () { tab.allowRemote = true; renderPreview(tab, container); };
+      var showBtn = el('button', 'ev-mini-btn', 'Load for all emails');
+      showBtn.onclick = function () { remoteCheckbox.checked = true; remoteCheckbox.onchange(); };
       notice.appendChild(showBtn);
-      container.insertBefore(notice, bodyWrap);
+      bodyCard.body.insertBefore(notice, bodyWrap);
     }
 
     if (p.decodeWarnings && p.decodeWarnings.length) {
@@ -551,211 +695,30 @@
       var dwNotice = el('div', 'ev-blocked-notice');
       dwNotice.title = 'The raw content-transfer-encoding for this part could not be decoded (corrupt or deliberately malformed base64) — it was skipped rather than shown as empty.';
       dwNotice.textContent = '⚠ ' + p.decodeWarnings.length + ' part(s) failed to decode and were skipped: ' + dwNames + '.';
-      container.insertBefore(dwNotice, bodyWrap);
+      bodyCard.body.insertBefore(dwNotice, bodyWrap);
     }
 
-    var metaSection = el('details', 'ev-collapsible');
-    metaSection.open = true;
-    metaSection.appendChild(el('summary', null, 'Metadata (domains, attachments, URL hosts)'));
-    metaSection.appendChild(renderMetadataPanel(p));
-    container.appendChild(metaSection);
+    var metaCard = bentoCard('ev-card-meta', 'info', 'Metadata', 'details');
+    metaCard.header.title = 'Domains, recipients, attachments and URL hosts';
+    metaCard.root.open = true;
+    metaCard.body.appendChild(renderMetadataPanel(p));
+    bento.appendChild(metaCard.root);
 
-    var linksSection = el('details', 'ev-collapsible');
-    var summary = el('summary', null, 'Links (' + links.length + ')');
-    linksSection.appendChild(summary);
-    linksSection.appendChild(renderLinksPanel(links));
-    container.appendChild(linksSection);
+    var linksCard = bentoCard('ev-card-wide', 'link', 'Links (' + links.length + ')', 'details');
+    linksCard.body.appendChild(renderLinksPanel(links));
+    bento.appendChild(linksCard.root);
 
     if (blockedCount) {
-      var blockedSection = el('details', 'ev-collapsible');
-      blockedSection.appendChild(el('summary', null, 'Blocked remote resources (' + blockedCount + ')'));
-      blockedSection.appendChild(renderBlockedPanel(blockedUrls));
-      container.appendChild(blockedSection);
+      var blockedCard = bentoCard('ev-card-wide', 'alert', 'Blocked remote resources (' + blockedCount + ')', 'details');
+      blockedCard.body.appendChild(renderBlockedPanel(blockedUrls));
+      bento.appendChild(blockedCard.root);
     }
 
     if (p.attachments.length) {
-      var attSummary = el('div', 'ev-att-summary',
+      var attSummary = el('div', 'ev-att-summary ev-card-wide ev-card-note',
         '📎 ' + p.attachments.length + ' attachment(s) — see the Attachments tab');
-      container.appendChild(attSummary);
+      bento.appendChild(attSummary);
     }
-  }
-
-  // ---------- sub-tab: Headers ----------
-
-  function renderHeaders(tab, container) {
-    container.innerHTML = '';
-    var p = tab.parsed;
-    var toolbar = el('div', 'ev-headers-toolbar');
-    toolbar.appendChild(copyBtn(function () {
-      return p.headers.map(function (h) { return h.name + ': ' + h.value; }).join('\n');
-    }, 'Copy all headers'));
-    container.appendChild(toolbar);
-
-    var authHeaders = EV.getHeaderAll(p.headers, 'authentication-results');
-    var received = EV.getHeaderAll(p.headers, 'received');
-    if (authHeaders.length || received.length) {
-      var sec = el('div', 'ev-security-headers');
-      if (authHeaders.length) {
-        sec.appendChild(el('div', 'ev-section-title', 'Authentication-Results'));
-        authHeaders.forEach(function (v) { sec.appendChild(el('div', 'ev-header-value-block', v)); });
-      }
-      if (received.length) {
-        sec.appendChild(el('div', 'ev-section-title', 'Received chain (' + received.length + ' hops, top = most recent)'));
-        received.forEach(function (v, i) {
-          var row = el('div', 'ev-received-hop');
-          row.appendChild(el('span', 'ev-hop-index', '#' + (i + 1)));
-          row.appendChild(el('span', 'ev-header-value-block', v));
-          sec.appendChild(row);
-        });
-      }
-      container.appendChild(sec);
-    }
-
-    var table = el('div', 'ev-headers-table');
-    p.headers.forEach(function (h) {
-      var row = el('div', 'ev-header-row');
-      row.appendChild(el('div', 'ev-header-name', h.name));
-      var valCell = el('div', 'ev-header-value', h.value);
-      row.appendChild(valCell);
-      var btn = copyBtn(function () { return h.value; }, 'Copy');
-      row.appendChild(btn);
-      table.appendChild(row);
-    });
-    container.appendChild(table);
-  }
-
-  // ---------- sub-tab: Attachments ----------
-
-  function renderTextAttachmentPreview(att, host) {
-    var text = EV.decodeTextBytes(att.bytes, 'utf-8');
-    var pre = el('pre', 'ev-attachment-text-preview');
-    pre.textContent = text.length > 200000 ? text.slice(0, 200000) + '\n\n… truncated …' : text;
-    host.appendChild(pre);
-  }
-
-  /** The OCR button/status/output panel for one image attachment -- same interaction pattern as
-   * the WHOIS button (disable-while-running, inline status text, never silently blank). Caches the
-   * result on the attachment object (att._ocrPromise), mirroring att._sha256Promise above, so
-   * re-visiting this sub-tab doesn't lose an in-flight or completed result. */
-  function renderOcrPanel(att, path) {
-    var wrap = el('div', 'ev-ocr-panel');
-    var btn = el('button', 'ev-btn ev-ocr-btn', '🔎 Extract text (OCR)');
-    btn.title = 'Runs local OCR on this image — no network call, nothing executed, pixel analysis only. Runs once and caches the result.';
-    var statusEl = el('span', 'ev-ocr-status');
-    var textHost = el('pre', 'ev-ocr-text-output');
-    textHost.style.display = 'none';
-    wrap.appendChild(btn);
-    wrap.appendChild(statusEl);
-    wrap.appendChild(textHost);
-
-    function showResult(text) {
-      textHost.textContent = text && text.trim() ? text : '(no text detected)';
-      textHost.style.display = 'block';
-      statusEl.textContent = '';
-    }
-
-    if (att._ocrText !== undefined) {
-      btn.textContent = 'Re-run OCR';
-      showResult(att._ocrText);
-    }
-
-    btn.onclick = function () {
-      if (!window.EV.ocr || !window.EV.ocr.isSupported()) {
-        statusEl.textContent = 'OCR isn’t available in this browser.';
-        return;
-      }
-      btn.disabled = true;
-      statusEl.textContent = 'Running OCR… (first use this session may take a few seconds to load the engine)';
-      att._ocrPromise = window.EV.ocr.run(att);
-      att._ocrPromise.then(function (text) {
-        btn.disabled = false;
-        btn.textContent = 'Re-run OCR';
-        att._ocrText = text;
-        showResult(text);
-        // Extends this text's search coverage to the current session's index immediately --
-        // covers both a cache-hit (an already-OCR'd attachment from an earlier session) and a
-        // freshly-computed result alike, since EV.ocr.run() checks the IndexedDB cache internally.
-        if (path && window.EV.onOcrTextReady) window.EV.onOcrTextReady(path, text);
-      }).catch(function (err) {
-        btn.disabled = false;
-        statusEl.textContent = 'OCR failed: ' + (err && err.message || 'unknown error');
-      });
-    };
-    return wrap;
-  }
-
-  function renderAttachments(tab, container) {
-    container.innerHTML = '';
-    var p = tab.parsed;
-    if (!p.attachments.length) {
-      container.appendChild(el('div', 'ev-muted', 'No attachments in this message.'));
-      return;
-    }
-    var firstMeaningfulImage = pickFirstMeaningfulImageAttachment(p.attachments);
-    p.attachments.forEach(function (att, idx) {
-      var card = el('div', 'ev-attachment-card');
-      var head = el('div', 'ev-attachment-head');
-      head.appendChild(el('span', 'ev-attachment-name', att.filename));
-      head.appendChild(el('span', 'ev-attachment-meta',
-        (att.isInline ? 'inline · ' : '') + att.mimeType + ' · ' + fmtBytes(att.size)));
-      card.appendChild(head);
-
-      var actions = el('div', 'ev-attachment-actions');
-      var dlBtn = el('button', 'ev-btn', 'Download');
-      dlBtn.onclick = function () { downloadBlob(att.bytes, att.filename, att.mimeType); };
-      actions.appendChild(dlBtn);
-
-      var vtBtn = el('button', 'ev-btn ev-vt-btn', '🛡 VirusTotal');
-      vtBtn.title = 'Look up this file’s SHA-256 on VirusTotal (opens in a new tab; nothing is uploaded, only the hash is looked up)';
-      vtBtn.style.display = 'none';
-      actions.appendChild(vtBtn);
-
-      var hashSpan = el('span', 'ev-attachment-hash', 'sha256: computing…');
-      hashSpan.title = 'SHA-256 of this attachment\'s raw bytes — computed once and cached, not recomputed on every visit to this tab.';
-      actions.appendChild(hashSpan);
-      // Cache the promise itself (not just its resolved value) on the
-      // attachment object, mirroring _previewBlobUrl below — re-visiting this
-      // tab used to recompute the hash from scratch every time, which is
-      // wasteful on a message with large attachments.
-      if (!att._sha256Promise) att._sha256Promise = sha256Hex(att.bytes);
-      att._sha256Promise.then(function (hex) {
-        if (hex) {
-          hashSpan.textContent = 'sha256: ' + hex;
-          vtBtn.style.display = 'inline-block';
-          vtBtn.onclick = function () {
-            window.open('https://www.virustotal.com/gui/file/' + hex, '_blank', 'noopener,noreferrer');
-          };
-        } else {
-          hashSpan.textContent = 'sha256: unavailable (serve over http(s) to enable)';
-        }
-      });
-      card.appendChild(actions);
-
-      if (/^image\//.test(att.mimeType) && att.size < 8 * 1024 * 1024) {
-        if (!att._previewBlobUrl) {
-          att._previewBlobUrl = URL.createObjectURL(new Blob([att.bytes], { type: att.mimeType }));
-          tab.blobUrls.push(att._previewBlobUrl);
-        }
-        var img = document.createElement('img');
-        img.className = 'ev-attachment-image-preview';
-        img.src = att._previewBlobUrl;
-        card.appendChild(img);
-        // "First image" = first one over a tiny-tracking-pixel size floor, inline or attached
-        // alike -- inline (cid:) images are often exactly where a real phishing screenshot lives
-        // (e.g. an entire fake login page embedded as one image), not just tracking pixels/logos,
-        // so the inline flag alone was never the right signal to skip on.
-        if (att === firstMeaningfulImage) {
-          card.appendChild(renderOcrPanel(att, tab.path));
-        }
-      } else if (/^text\/(plain|csv)$/.test(att.mimeType) || /\.(txt|csv|log|json)$/i.test(att.filename)) {
-        renderTextAttachmentPreview(att, card);
-      } else if (att.mimeType === 'text/html' || /\.html?$/i.test(att.filename)) {
-        var warn = el('div', 'ev-muted', 'HTML attachment — shown as inert source text only, never rendered:');
-        card.appendChild(warn);
-        renderTextAttachmentPreview(att, card);
-      }
-      container.appendChild(card);
-    });
   }
 
   // ---------- sub-tab: text-body / html-body (decoded MIME parts, verbatim) ----------
@@ -855,8 +818,8 @@
   var SUBTAB_ORDER = ['preview', 'headers', 'textbody', 'htmlbody', 'attachments', 'raw'];
   var SUBTAB_LABELS = { preview: 'Preview', headers: 'Headers', textbody: 'text-body', htmlbody: 'html-body', attachments: 'Attachments', raw: 'Raw' };
   var SUBTAB_RENDERERS = {
-    preview: renderPreview, headers: renderHeaders, textbody: renderTextBody,
-    htmlbody: renderHtmlBody, attachments: renderAttachments, raw: renderRaw
+    preview: renderPreview, headers: EV.ui.renderHeaders, textbody: renderTextBody,
+    htmlbody: renderHtmlBody, attachments: EV.ui.renderAttachments, raw: renderRaw
   };
 
   EV.renderTab = function (tab, elements) {

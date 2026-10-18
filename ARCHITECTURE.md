@@ -7,6 +7,8 @@ how to use it, see [README.md](README.md) and [HELP.md](HELP.md).
 
 - [No build step](#no-build-step)
 - [File layout](#file-layout)
+- [Feature modules and `ctx`](#feature-modules-and-ctx)
+- [Portability and standalone rules](#portability-and-standalone-rules)
 - [Why JavaScript expressions for rules](#why-javascript-expressions-for-rules)
 - [Security model](#security-model)
 - [Design notes](#design-notes)
@@ -20,10 +22,11 @@ how to use it, see [README.md](README.md) and [HELP.md](HELP.md).
 Everything under `js/` is a classic (non-module) script attached to a
 single `window.EV` namespace, loaded in order by `index.html`. No bundler,
 no npm, no transpilation — nothing in the toolchain that can go out of
-date or fail to build. `js/` is grouped into five feature folders —
+date or fail to build. `js/` is grouped into five folders —
 `core/` (storage/config), `parsing/` (turning raw bytes into a safe
 structured email), `indexing/` (search + the Worker pool), `rules/` (the
-tagging-rules engine), and `ui/` (everything that touches the DOM).
+tagging-rules engine), and `ui/` (everything that touches the DOM, itself
+split into `features/` and `email/`).
 
 ## File layout
 
@@ -33,6 +36,10 @@ tagging-rules engine), and `ui/` (everything that touches the DOM).
 | `js/parsing/sanitize.js` | Turns a raw HTML body into a safe document: DOMPurify → resource URL rewriting (blocks remote content, resolves `cid:` to local blob URLs, flags link text/destination mismatches) → CSP-wrapped shell, for a sandboxed `<iframe>`. |
 | `js/parsing/urlExtract.js` | URL extraction, HTML→text fallback, the shared tokenizer used by both the search index and query parser. |
 | `js/indexing/indexLogic.js` | The actual per-file work for indexing, raw search, and rule evaluation (facts-object construction + the compiled-rule cache) — runs identically inside a Worker or (fallback) the main thread. Also owns the sender-spoofing helpers, the always-on urgency/financial-indicator scanners, and eager per-attachment SHA-256 hashing, all computed once per file alongside everything else. |
+| `js/core/folderPath.js` | Pure helpers for the opened folder's full on-disk path: `fingerprint` (a dozen evenly-spread `{p, s}` file path/size pairs) and `join` (unix or backslash separator by the base). The real lookup is `scripts/folder_locator.py`, called through serve.py's `/__mantiz/locate-folder`. |
+| `scripts/folder_locator.py` | Read-only, bounded, stdlib-only search that finds a folder by name and accepts it only when every fingerprinted file exists with the same size (mdfind on macOS, a time-limited walk elsewhere). |
+| `js/parsing/headerTables.js` | Pure parsing for the Headers tab and the checklist: `parseAuthResults` (Authentication-Results → method/result/comment/props), `parseReceived`/`receivedChain`, and `originOf` (earliest / newest public IP in the chain), `chainTiming` (per-gap delays, slowest, negative gaps kept) and `hopTableText`, `analyzeHeaderForgery` (two strong inserted-header patterns only), `classifyOrigin` (internal/external verdict against Settings → Organization), `analyzeChain` (per-hop hand-off state ok/broken/unknown via `hopsConnect`, plus time-travel beyond a 5-minute skew). The one definition used by the Headers tab, the Security checks row (`received-broken`/`received-time-travel`) and the search index. |
+| `js/indexing/anomalies.js` | The Security card's Header / Body / Attachments / Language checklist as pure, DOM-free logic (`EV.analyzeAnomalies`, plus `EV.scriptProfile`/`EV.mixedScriptWords`). The one definition shared by the Preview card, the search index (`meta.flag:`, `script.*:`) and rule facts (`f.anomalies`, `f.subjectScripts`, `f.bodyScripts`); bounded scans (20K chars of body, 200K of HTML, 50 hops) and an ASCII fast path keep it cheap enough for every email at indexing time. |
 | `js/indexing/worker.js` | Thin Web Worker entry point around `indexLogic.js`. |
 | `js/indexing/workerClient.js` | A pool of Workers (one per CPU core) with a synchronous, yielding fallback; streams a huge file list through the pool with bounded concurrency so memory never holds more than a small window of files at once. |
 | `js/indexing/searchIndex.js` | Main-thread decoded search: structure-of-arrays metadata + an inverted index built incrementally from worker results, plus the query grammar/ranking. |
@@ -41,10 +48,14 @@ tagging-rules engine), and `ui/` (everything that touches the DOM).
 | `js/rules/rulesStore.js` | IndexedDB CRUD for rule definitions plus the per-rule "current match set" that makes disabling/renaming exact and instant. |
 | `js/rules/rulesEngine.js` | Runs enabled rules across the pool, diffs new vs. previous match sets, applies exactly the tag add/remove operations needed; the dry-run "Test" path. |
 | `js/rules/ruleTemplates.js` | The 27 starter rule templates (`EV.RULE_TEMPLATES`) — a DOM-free module so `tests/ruleTemplates.test.js` can compile-check every one under `jsc`. |
-| `js/ui/app.js` | Bootstraps the page: wires the toolbar, tree, tabs, search panel, rule modal, Settings page, and the sample-emails demo banner together. The only file that reaches into `index.html`'s DOM structure directly. |
+| `js/ui/app.js` | The composition root, ~180 lines: builds the long-lived objects (worker pool, search index, rules engine, `state`), looks up the page's elements once, creates every feature module with one shared `ctx`, and starts the app. The only file that knows the whole module list. |
+| `js/ui/features/*.js` | The app's features, one module each, created by `app.js` in order: `explorer` (file tree, multi-select), `fileOps` (right-click menu, Delete/Move/Copy, bulk OCR), `tabsView` (tab strip glue), `pages` (Folder overview and Settings pages), `folderLocation` (names/paths shown, real-path lookup), `workspace` (opening folders, demo, indexing start), `tagsPanel` (tags, Tag Deletion), `settingsPage`, `rulesPanel`, `searchPanel`, `exportsPanel` (tag/rule import-export, sidecar, case report), `session`. See *Feature modules and `ctx`* below. |
+| `js/ui/overlays.js` / `js/ui/uiKit.js` | Shared UI primitives with no app state: the context menu, toast (with Undo), clipboard copy, one-dialog-at-a-time slot, byte formatters; and the DOM/format helpers (`el`, `copyBtn`, ...) every UI file uses. |
 | `js/ui/fileTree.js` | Folder ingestion — File System Access API, `<input webkitdirectory>`, and drag-and-drop, unified into one tree model — plus the Delete/Move/Copy write-side logic. |
 | `js/ui/virtualList.js` | Minimal virtualized list so the tree and search results stay smooth at any folder size. |
-| `js/ui/tabs.js` / `js/ui/render.js` | Multi-tab email viewer (with live tab icons/badges) and its sub-views. |
+| `js/ui/tabs.js` / `js/ui/render.js` | Multi-tab viewer (LRU eviction) and the email renderer: the Preview (bento cards, Metadata, Links, calendar card, tag editor), Raw and decoded text/HTML views. |
+| `js/ui/email/*.js` | The email view's larger pieces, each a pure presentation of one analysis module: `securityCard` (checklist + metric tiles), `headersView` (Authentication-Results, Received chain, decoded All headers), `attachmentsView` (attachments, SHA-256, OCR panel). |
+| `js/core/settingsCache.js` | Synchronous copies of the Settings lists the Preview needs (categories, trusted domains, the organization's own domains), refreshed when Settings change. |
 | `js/ui/icons.js` | A small dependency-free inline-SVG icon set used throughout the toolbar/tree/tabs/context menus. |
 | `js/core/tags.js` / `js/core/db.js` | IndexedDB-backed tags/notes, keyed by `Message-ID` (content-hash fallback), with JSON export/import. |
 | `js/core/settings.js` | The user-editable trusted-domains list, domain categories, the max-open-tabs setting, and the sample-emails demo banner's dismissed/always-show state, all IndexedDB-backed. |
@@ -52,6 +63,42 @@ tagging-rules engine), and `ui/` (everything that touches the DOM).
 | `js/core/ocrBridge.js` | The app's one ES module (`<script type="module">`) — bridges to the vendored OCR engine. Runs entirely client-side against already-in-memory attachment bytes. |
 | `js/core/ocrCache.js` | IndexedDB-backed cache of OCR results, keyed by the attachment's own SHA-256 (content-addressed), so the same image reused across emails or sessions never re-runs OCR. |
 | `js/core/session.js` | Persists what was open so the app can offer to resume it. |
+
+## Feature modules and `ctx`
+
+`js/ui/app.js` is deliberately small. Each feature lives in `js/ui/features/<name>.js` as `EV.ui.features.<name> = function create(ctx) { ... }`:
+
+- **One shared `ctx` object.** It holds the long-lived objects (`state`, `els`, `pool`, `searchIdx`, `rawSearchObj`, `rulesEngine`) and whatever each feature *exports* for the others (`ctx.openTab`, `ctx.renderRulesList`, ...). Features never call each other's modules directly — `tests/test_structure.py` fails if one does — and only reach into `ctx` when a user action runs, never while being created, so creation order is irrelevant for correctness.
+- **A feature owns its DOM wiring.** It attaches its own listeners and keeps its own private state; state shared between features lives on `state` or `ctx`.
+- **Shared primitives** (`el`, toast, context menu, dialog slot) come from `EV.ui.*` (`uiKit.js`, `overlays.js`) — never re-implemented.
+- **Pure logic stays out of `ui/`.** Anything that can be decided without the DOM (parsing, analysis, query grammar, path math) lives in `parsing/`, `indexing/`, `core/` or `rules/` and is covered by the `jsc` tests; a feature module only presents it.
+
+What each module exports to the others, and what it needs from them:
+
+| Module | Exports on `ctx` | Uses from other modules |
+|---|---|---|
+| `explorer` | `rebuildVisibleRows`, `revealInTree`, `updateBulkTagBar`, `treeList` | `openTab`, `showFileActionMenu`, `startIndexing`, `untagSelectedEmails`, `updateFilesStatus` |
+| `fileOps` | `showFileActionMenu`, `WRITE_UNAVAILABLE_TITLE` | `fullPath`, `reloadWorkspaceFromHandle` |
+| `tabsView` | `onTabActivate`, `openTab`, `tabMgr` | `closeOverviewView`, `closeSettingsView`, `fullPath`, `overviewOpen`, `renderPathBar`, `revealInTree`, `saveSession`, `settingsOpen`, `treeList` |
+| `pages` | `closeOverviewView`, `closeSettingsView`, `overviewOpen`, `settingsOpen` | `onTabActivate`, `renderSettingsView`, `tabMgr` |
+| `folderLocation` | `fullPath`, `renderPathBar`, `resolveFolderLocation`, `updateFilesStatus` | `tabMgr` |
+| `workspace` | `initDemoBanner`, `reloadWorkspaceFromHandle`, `setWorkspace`, `startIndexing` | `checkForTagsSidecar`, `clearSearchResults`, `fullPath`, `rebuildVisibleRows`, `refreshTagDotCache`, `resolveFolderLocation`, `runAllEnabledRules`, `saveSession`, `tabMgr`, `updateBulkTagBar`, `updateFilesStatus`, `updateTagsSidecarButtonState` |
+| `tagsPanel` | `refreshTagDotCache`, `renderTagFilterList`, `resolvePathsForTags`, `untagSelectedEmails` | `rebuildVisibleRows`, `refreshLiveResultsView`, `refreshSuggestTagNames`, `renderRulesList`, `showFileActionMenu`, `showTagMatches`, `tabMgr`, `toggleRule` |
+| `settingsPage` | `renderSettingsView` | `tabMgr` |
+| `rulesPanel` | `refreshLiveResultsView`, `renderRulesList`, `runAllEnabledRules`, `showTagMatches`, `toggleRule`, `liveResultsView` | `clearSearchResults`, `currentResults`, `resolvePathsForTags`, `searchResultsList`, `showFileActionMenu`, `showSidebarView`, `updateSearchSelectionBar` |
+| `searchPanel` | `clearSearchResults`, `refreshSuggestTagNames`, `updateSearchSelectionBar`, `currentResults`, `searchResultsList` | `liveResultsView`, `openTab`, `showFileActionMenu`, `showSidebarView` |
+| `exportsPanel` | `checkForTagsSidecar`, `updateTagsSidecarButtonState` | `WRITE_UNAVAILABLE_TITLE`, `renderRulesList` |
+| `session` | `saveSession`, `tryResumeSession` | `openTab`, `setWorkspace`, `tabMgr` |
+
+To add a feature: create `js/ui/features/<name>.js`, add its `<script>` tag before `app.js` in `index.html`, and add its name to the list in `app.js`; `tests/test_structure.py` checks all three agree.
+
+## Portability and standalone rules
+
+These hold for every change (and `tests/test_structure.py` enforces the checkable ones):
+
+- **Standalone.** No build step, no npm/pip packages, no CDN: every `<script>`/`<link>` is a local file; the browser code needs only a modern browser, and `scripts/serve.py` needs only the Python 3 standard library. The only network requests are two explicit, per-click lookups (VirusTotal, WHOIS) plus same-origin calls to the local server.
+- **OS-independent.** The same files run on macOS, Windows and Linux: no hard-coded user paths, no platform sniffing in the browser, modifier keys are `Ctrl || Cmd`, paths are joined with the separator of the path that was found (`/` or `\`). Anything OS-specific in `scripts/` sits behind a runtime check (`mdfind` only on macOS, drive letters only on Windows) and has a test with a mock for the other platforms.
+- **Graceful degradation.** A feature that needs something a host lacks (File System Access for writes, `crypto.subtle` over `file://`, the local server for folder paths) says so and falls back, rather than failing.
 
 ## Why JavaScript expressions for rules
 
@@ -93,8 +140,16 @@ whole point of a phishing-analysis tool:
   (`blob:` URLs, origin-scoped) need to load; it grants no script
   execution on its own.
 - No network request happens as a side effect of opening or browsing an
-  email — remote images/CSS are blocked by default and only fetched on an
-  explicit per-email "Load remote content" click.
+  email — remote images/CSS are blocked by default and only fetched after an
+  explicit, confirmed "Load remote content" switch, which applies to all emails
+  until turned off, a new folder is opened or the page is reloaded (it is held
+  in memory only, never persisted, and a status-bar chip shows while it is on).
+- The only other traffic is same-origin requests from the page to the local
+  server that serves it (`scripts/serve.py`): a keep-alive ping and the folder
+  lookup that finds an opened folder's real path (`/__mantiz/locate-folder`).
+  That endpoint is read-only and bounded, answers only requests from the app's own
+  page on a loopback host (checked via Host, Origin and Sec-Fetch-Site), and returns
+  a path only when every fingerprinted file matches by name and size.
 - Attachments are never auto-opened or rendered live. HTML/script
   attachments are shown as inert, escaped source text only. The only way
   to act on one is an explicit Download click.
@@ -193,8 +248,9 @@ UI — is hand-written for this app with no further dependencies.
 
 `tests/*.test.js` are real, checked-in regression tests — no Node/npm
 involved, they run under JavaScriptCore (`jsc`), the same engine used for
-manual syntax checking. `bash tests/run-all.sh` runs the whole suite (13
-files, 384 assertions) plus a syntax check of every `js/**/*.js` file;
+manual syntax checking. `bash tests/run-all.sh` runs the whole suite (25
+files, over 1,000 assertions, plus the Python tests for the folder locator) and a
+syntax check of every `js/**/*.js` file;
 CI (`.github/workflows/ci.yml`) runs the same script on every push/PR.
 
 Coverage includes: the MIME parser against real fixtures, tag-provenance

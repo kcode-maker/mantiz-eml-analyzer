@@ -1,3 +1,5 @@
+Received: from mailer.secure-doc-share.net (mailer.secure-doc-share.net [198.51.100.140]) by mx.example-corp.com with ESMTPS id 9A3E10; Mon, 22 Jan 2024 07:15:06 +0000
+Received: from app01.secure-doc-share.net (app01.secure-doc-share.net [198.51.100.141]) by mailer.secure-doc-share.net with ESMTP id C7D2; Mon, 22 Jan 2024 07:15:02 +0000
 From: "Document Sharing" <noreply@secure-doc-share.net>
 To: recipient1@example-corp.com
 Subject: A document has been shared with you

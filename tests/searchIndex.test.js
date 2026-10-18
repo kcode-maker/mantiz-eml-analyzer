@@ -114,7 +114,16 @@ var docs = [
     fileId: 12, path: 'a/cc-bcc-reply.eml', subject: 'Quarterly report', fromAddr: 'sender@example.com', fromName: 'Sender',
     ccStr: 'carol@example.com', bccStr: 'dave@example.com', replyToStr: 'noreply@example.com', returnPathStr: 'bounce@example.com',
     messageId: 'unique-msg-id-123@example.com', attNames: 'report.docx', attExts: ['.docx'], emailId: 'mid:13'
-  })
+  }),
+  // substring-fallback fixture: no display name at all, so "adobe" is never its own indexed
+  // token -- EV.tokenize keeps "message@adobe.com" glued together as one token, exactly the real
+  // user-reported repro (a real Adobe notification with no display name didn't show up searching
+  // "adobe"). attNames similarly has no word boundary around "invoice".
+  makeDoc({ fileId: 13, path: 'a/adobe-nodisplayname.eml', subject: 'Please review and sign', fromAddr: 'message@adobe.com', attNames: 'siginvoice2024.pdf', emailId: 'mid:14' }),
+  // body has no retained raw text (unlike subject/from/etc.) -- "markerglued" is one token, never
+  // split, so a search for "marker" alone must NOT match it via substring fallback; only an exact
+  // "markerglued" token lookup should.
+  makeDoc({ fileId: 14, path: 'a/markerGlued.eml', subject: 'note', body: 'markerglued', emailId: 'mid:15' })
 ];
 docs.forEach(function (d) { idx.ingestDocForTest(d); });
 
@@ -145,7 +154,7 @@ step(function () { return idx.search('-(header.from:paypal OR header.from:amazon
 step(function (res) {
   assertPaths(res.results, ['a/random1.eml', 'a/cashcheck.eml', 'a/cashonly.eml', 'a/checkonly.eml',
     'a/markerC-D.eml', 'a/markerA-D.eml', 'a/markerD-only.eml', 'a/markerA-only.eml', 'a/markerB-only.eml',
-    'a/cc-bcc-reply.eml'],
+    'a/cc-bcc-reply.eml', 'a/adobe-nodisplayname.eml', 'a/markerGlued.eml'],
     'negated group excludes exactly the paypal/amazon senders');
 });
 
@@ -280,6 +289,10 @@ step(function (res) { assertPaths(res.results, ['a/cc-bcc-reply.eml'], 'header.m
 step(function () { return idx.search('attachment.ext:.docx'); });
 step(function (res) { assertPaths(res.results, ['a/cc-bcc-reply.eml'], 'attachment.ext: matches by extension, not filename substring'); });
 
+step(function () { return idx.search('attachment.ext:docx'); });
+step(function (res) { assertPaths(res.results, ['a/cc-bcc-reply.eml'], 'attachment.ext: works without the leading dot too'); });
+step(function () { return idx.search('attachment.ext:DOCX'); });
+step(function (res) { assertPaths(res.results, ['a/cc-bcc-reply.eml'], 'attachment.ext: is case-insensitive'); });
 step(function () { return idx.search('attachment.ext:.pdf'); });
 step(function (res) { assertPaths(res.results, ['a/paypal1.eml'], 'attachment.ext: .pdf matches only the pdf fixture, not the exe/docx ones'); });
 
@@ -380,8 +393,127 @@ step(function (resA) {
 
 step(function () { return idx.search('attachment.ocr: "shared document"'); });
 step(function (res) {
-  assertPaths(res.results, ['a/paypal1.eml', 'a/random1.eml'], 'space before a quoted value is also tolerated: attachment.ocr: "shared document"');
+  // a/paypal1.eml's OCR text is "shared a document" -- the words aren't adjacent, so a quoted phrase
+  // (now verified for real adjacency on retained text) correctly excludes it.
+  assertPaths(res.results, ['a/random1.eml'], 'space before a quoted value is also tolerated: attachment.ocr: "shared document"');
 });
+
+// ---- 16. Substring fallback on raw-text fields (real user-reported bug): EV.tokenize keeps a
+// punctuation-glued run (an email address, a dotted domain, a filename with no word boundary) as
+// ONE token, so "adobe" was never its own indexed token for a sender with no display name at all
+// (message@adobe.com) -- a plain word search, or header.from:, found nothing even though the term
+// is plainly "in" the email. substringCandidatesForToken widens the token-index lookup with a
+// linear substring scan over the same RAW_TEXT_FIELDS field:/regex/ already scans, for exactly
+// this case -- never for body/meta/url/ocr, which have no raw text retained per file at all. ----
+step(function () { return idx.search('adobe'); });
+step(function (res) {
+  assertPaths(res.results, ['a/adobe-nodisplayname.eml'], 'bare word "adobe" finds a sender with no display name at all, only "message@adobe.com" (real user repro)');
+});
+
+step(function () { return idx.search('header.from:adobe'); });
+step(function (res) {
+  assertPaths(res.results, ['a/adobe-nodisplayname.eml'], 'header.from:adobe finds it too, not just a bare "any field" search');
+});
+
+step(function () { return idx.search('header.from:adobe.com'); });
+step(function (res) {
+  assertPaths(res.results, ['a/adobe-nodisplayname.eml'], 'the full glued domain "adobe.com" also matches as a substring, not just a leading fragment');
+});
+
+step(function () { return idx.search('attachment.filename:invoice'); });
+step(function (res) {
+  // a/paypal2.eml's "invoice.exe" is also one glued token ("." is part of EV.tokenize's allowed
+  // character class) and legitimately contains "invoice" as a substring too -- correctly widened.
+  assertPaths(res.results, ['a/adobe-nodisplayname.eml', 'a/paypal2.eml'], 'attachment.filename: substring-matches "invoice" inside filenames with no word boundary around it');
+});
+
+step(function () { return idx.search('marker'); });
+step(function (res) {
+  assertPaths(res.results, [], 'an email whose decoded text was NOT retained (no bodyLc, e.g. beyond the memory budget) falls back to whole-word matching -- "marker" must not match the body token "markerglued"');
+});
+step(function () { return idx.search('markerglued'); });
+step(function (res) {
+  assertPaths(res.results, ['a/markerGlued.eml'], 'the exact full token "markerglued" still matches normally');
+});
+
+// ---- 17. Full-text substring search (retained decoded text) + per-header + auth search ----
+// A second index instance so these fixtures can carry retained text / header text without disturbing
+// the shared corpus above.
+var idx2 = EV.createSearchIndex(null);
+function makeDoc2(o) {
+  var d = makeDoc(o);
+  d.bodyLc = (o.body || '').toLowerCase();
+  d.urlsLc = (o.urls || '').toLowerCase();
+  d.headerTextsLc = {};
+  Object.keys(o.headers || {}).forEach(function (n) { d.headerTextsLc[n] = String(o.headers[n]).toLowerCase(); });
+  d.headerTokens = {};
+  Object.keys(d.headerTextsLc).forEach(function (n) { d.headerTokens[n] = EV.tokenizeExpanded(d.headerTextsLc[n]); });
+  d.spf = o.hasOwnProperty('spf') ? o.spf : 'pass'; d.dkim = o.hasOwnProperty('dkim') ? o.dkim : 'pass'; d.dmarc = o.hasOwnProperty('dmarc') ? o.dmarc : 'pass';
+  return d;
+}
+idx2.resetForTest();
+[
+  makeDoc2({ fileId: 0, path: 'b/one.eml', subject: 'hello', fromAddr: 'x@example.com', body: 'Please wire the funds to https://secure-paypa1-login.example/verify today',
+    headers: { 'received': 'from mail-ej1-f68.google.com (mail-ej1-f68.google.com [209.85.218.68]) by mx.example.org', 'x-mailer': 'Apple Mail (2.3774.600.62)', 'authentication-results': 'mx.example.org; spf=fail; dkim=pass; dmarc=fail' },
+    spf: 'fail', dkim: 'pass', dmarc: 'fail', emailId: 'e1' }),
+  makeDoc2({ fileId: 1, path: 'b/two.eml', subject: 'bonjour', fromAddr: 'y@example.com', body: 'Счёт на оплату срочно, 請確認您的帳戶',
+    headers: { 'x-mailer': 'Microsoft Outlook 16.0' }, spf: 'pass', dkim: 'pass', dmarc: 'pass', emailId: 'e2' }),
+  makeDoc2({ fileId: 2, path: 'b/three.eml', subject: 'plain', fromAddr: 'z@example.com', body: 'nothing here', headers: {}, spf: null, dkim: null, dmarc: null, emailId: 'e3' })
+].forEach(function (d) { idx2.ingestDocForTest(d); });
+function s2(q, opts) { return idx2.search(q, opts); }
+
+step(function () { return s2('oogle'); });
+step(function (res) { assertPaths(res.results, ['b/one.eml'], 'a bare mid-word fragment ("oogle") matches inside a Received header host'); });
+step(function () { return s2('paypa1-login'); });
+step(function (res) { assertPaths(res.results, ['b/one.eml'], 'a fragment of a URL host in the body matches'); });
+step(function () { return s2('funds wire'); });
+step(function (res) { assertPaths(res.results, ['b/one.eml'], 'unquoted multi-word is ANDed per word in any order, each word a substring'); });
+step(function () { return s2('"wire the funds"'); });
+step(function (res) { assertPaths(res.results, ['b/one.eml'], 'quoted phrase matches contiguous body text'); });
+step(function () { return s2('"funds the wire"'); });
+step(function (res) { assertPaths(res.results, [], 'quoted phrase with the words in a different order does not match'); });
+step(function () { return s2('оплату'); });
+step(function (res) { assertPaths(res.results, ['b/two.eml'], 'Cyrillic body text is searchable (the word tokenizer cannot index it)'); });
+step(function () { return s2('帳戶'); });
+step(function (res) { assertPaths(res.results, ['b/two.eml'], 'CJK body text is searchable'); });
+step(function () { return s2('header.received:google.com'); });
+step(function (res) { assertPaths(res.results, ['b/one.eml'], 'header.received: finds a host inside the Received header'); });
+step(function () { return s2('header.x-mailer:outlook'); });
+step(function (res) { assertPaths(res.results, ['b/two.eml'], 'header.x-mailer: targets one named header'); });
+step(function () { return s2('header.x-mailer:mail'); });
+step(function (res) { assertPaths(res.results, ['b/one.eml'], 'header.x-mailer: substring ("mail" in "Apple Mail" only, not Outlook)'); });
+step(function () { return s2('header.Received:GOOGLE'); });
+step(function (res) { assertPaths(res.results, ['b/one.eml'], 'header names and values are case-insensitive'); });
+step(function () { return s2('header.no-such-header:foo'); });
+step(function (res) { assert(res.results.length === 0 && /no indexed email has a "no-such-header" header/.test(res.warnings.join(' ')), 'an unknown header name warns instead of silently matching nothing'); });
+step(function () { return s2('header.raw:apple'); });
+step(function (res) { assertPaths(res.results, ['b/one.eml'], 'header.raw: substring-matches across all header values'); });
+step(function () { return s2('auth.spf:fail'); });
+step(function (res) { assertPaths(res.results, ['b/one.eml'], 'auth.spf:fail'); });
+step(function () { return s2('auth.dmarc:pass'); });
+step(function (res) { assertPaths(res.results, ['b/two.eml'], 'auth.dmarc:pass'); });
+step(function () { return s2('auth.dkim:missing'); });
+step(function (res) { assertPaths(res.results, ['b/three.eml'], 'auth.dkim:missing finds emails with no DKIM result at all'); });
+step(function () { return s2('-auth.spf:fail header.x-mailer:mail'); });
+step(function (res) { assertPaths(res.results, [], 'auth/header clauses compose with negation and AND'); });
+step(function () {
+  var names = idx2.headerNames().map(function (h) { return h.name + ':' + h.count; });
+  assert(names[0] === 'x-mailer:2' && names.indexOf('received:1') !== -1, 'headerNames() lists header names by frequency (' + JSON.stringify(names) + ')');
+  assert(idx2.textCoverage().retained === 3 && idx2.textCoverage().total === 3, 'all 3 emails have retained text');
+});
+
+// ---- 18. Beyond the memory budget: emails whose text isn't retained fall back to whole-word + per-header postings ----
+var idx3 = EV.createSearchIndex(null);
+idx3.resetForTest();
+idx3.setRetainedBudgetForTest(10); // far too small to retain anything
+idx3.ingestDocForTest(makeDoc2({ fileId: 0, path: 'c/big.eml', subject: 'x', fromAddr: 'q@example.com', body: 'see mail.google.com now', headers: { 'received': 'from mail-ej1-f68.google.com by mx' }, emailId: 'c1' }));
+step(function () { return idx3.search('header.received:google.com'); });
+step(function (res) { assertPaths(res.results, ['c/big.eml'], 'non-retained email: header.received:google.com still found via the per-header token index (domain suffixes are indexed)'); });
+step(function () { return idx3.search('google'); });
+step(function (res) { assertPaths(res.results, ['c/big.eml'], 'non-retained email: a bare domain label is found via header token parts'); });
+step(function () { return idx3.search('oogle'); });
+step(function (res) { assertPaths(res.results, [], 'non-retained email: a mid-word fragment is NOT found (whole-word fallback) -- the documented limit'); });
+step(function () { assert(idx3.textCoverage().retained === 0 && idx3.textCoverage().total === 1, 'textCoverage reports 0 of 1 retained'); });
 
 step(function () {
   print('---');

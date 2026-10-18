@@ -1,0 +1,24 @@
+Received: from relay.mailer-relay.example-test.net (relay.mailer-relay.example-test.net [198.51.100.203]) by mx.example-corp.com with ESMTPS id 8A1F05; Thu, 25 Jan 2024 12:00:06 +0000
+Return-Path: <bounce@mailer-relay.example-test.net>
+From: "Bank Statements" <statements@secure-bank-notices.example-test.com>
+To: accounts-payable@example-corp.com
+Subject: Your statement
+Date: Thu, 25 Jan 2024 12:00:00 +0000
+Message-ID: <disguised-1@secure-bank-notices.example-test.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="B12C"
+
+--B12C
+Content-Type: text/plain; charset=utf-8
+
+Your statement is attached. The attachment is named like a PDF, but its first
+bytes are those of a Windows program (a harmless placeholder in this sample).
+The Return-Path domain also differs from the sender's.
+
+--B12C
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="Statement.pdf"
+Content-Transfer-Encoding: base64
+
+TVqQAAMAAABIQVJNTEVTUyBTQU1QTEUgUExBQ0VIT0xERVIgLSBOT1QgQSBQUk9HUkFN
+--B12C--

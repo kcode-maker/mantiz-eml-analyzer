@@ -29,10 +29,15 @@ cd mantiz-eml-analyzer
 python3 scripts/serve.py
 ```
 
-This opens the app in your browser and keeps running in that terminal
-window until you close it or press `Ctrl+C` — nothing left running in the
-background afterward. For double-click launchers and other ways to start
-it, see [HELP.md](HELP.md#getting-started).
+This opens the app in your browser. The server shuts itself down a few
+seconds after you close the app's last browser tab (or press `Ctrl+C` /
+close the terminal) — nothing to clean up. Pass `--keep-running` to keep it
+up after the browser closes. For double-click launchers and other ways to
+start it, see [HELP.md](HELP.md#getting-started).
+
+**"Address already in use"** means an older copy is still running; the
+error message names its PID and the exact command to stop it (e.g.
+`kill 12345`), or pass a different port: `python3 scripts/serve.py 9000`.
 
 Opening a folder never copies or moves your files — everything is read in
 place, straight from disk.
@@ -51,10 +56,19 @@ place, straight from disk.
   rendering (scripts always stripped, remote content blocked by default).
 - **Inspect**: SPF/DKIM/DMARC badges, sender-spoofing and lookalike-domain
   detection, always-on urgency/financial-indicator signals, a WHOIS
-  lookup, local OCR text extraction from image attachments.
-- **Search**: a namespaced query grammar (`header.*`/`attachment.*`) with
-  phrases, exclusion, OR/grouping, numeric comparisons, and regex, plus a
-  raw-byte fallback mode.
+  lookup, local OCR text extraction from image attachments, a Security
+  checks checklist (header, body and script/language signals), a Headers
+  tab with parsed authentication results, a drawn Received chain
+  (broken or backwards hops flagged) and every header shown decoded,
+  inserted-header and spoofed-internal-sender detection, and the opened
+  folder's full path.
+- **Search**: whatever you type matches as plain text anywhere in the
+  email (body, links, any header, OCR text, non-English included), with a
+  namespaced grammar to narrow it (`header.<any header>:`, `auth.spf:`,
+  `attachment.*`), phrases, exclusion, OR/grouping, numeric comparisons,
+  regex, and a raw-byte fallback mode — with VS Code-style autocomplete
+  for fields, your folder's real header names, and values (the tag boxes
+  and the rule editor autocomplete too).
 - **Tag and automate**: manual tags plus a rules engine — write a boolean
   JavaScript expression once and every matching email gets tagged
   automatically, now and on every future run. 27 starter templates ship
@@ -69,7 +83,8 @@ See [HELP.md](HELP.md) for the full guide to every feature.
 Built to be safe to point at hostile input: no script from an email ever
 executes, no network request happens as a side effect of browsing, and
 nothing is sent anywhere except two explicit, per-click, user-initiated
-exceptions (a VirusTotal URL/hash lookup and a WHOIS domain lookup). See
+exceptions (a VirusTotal URL/hash lookup and a WHOIS domain lookup); the
+app also talks to the local server that serves it, and only to that. See
 [ARCHITECTURE.md](ARCHITECTURE.md#security-model) for the full model.
 
 ## License

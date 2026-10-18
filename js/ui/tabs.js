@@ -57,7 +57,6 @@
         parseError: null,
         loading: false,
         activeSubTab: 'preview',
-        allowRemote: false,
         blobUrls: [],
         scrollPositions: {},
         lastActivated: 0

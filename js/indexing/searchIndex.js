@@ -72,6 +72,26 @@
     body: 'body', url: 'url'
   };
 
+  // meta.* -- one searchable field per row of the Preview's Metadata card (sender / Reply-To / Return-Path
+  // domains, URL domains, domain categories) plus its mismatch badges and the sender/finance signals. Each is
+  // a case-insensitive SUBSTRING match against a small per-file value (the domain, not the whole address, so
+  // meta.fromdomain:paypal finds paypal.evil.net but not an email that merely says "PayPal" in its display
+  // name -- that is header.from's job), except meta.flag which is an exact name from FLAG_VALUES.
+  var META_FIELDS = {
+    'meta.fromdomain': 'the sender\'s domain', 'meta.replytodomain': 'the Reply-To domain',
+    'meta.returnpathdomain': 'the Return-Path domain', 'meta.urldomain': 'any host in the email\'s links',
+    'meta.originip': 'the earliest public IP in the Received chain', 'meta.connectingip': 'the IP that connected to the receiving side (cannot be forged by the sender)',
+    'meta.category': 'a domain category', 'meta.flag': 'a mismatch/anomaly flag', 'meta.financial': 'a financial indicator type'
+  };
+  // The five sender-analysis flags indexLogic computes itself, plus every id the Security checklist can raise
+  // (js/indexing/anomalies.js). replyto-/returnpath-mismatch appear in both: the checklist is their one definition.
+  var LEGACY_FLAGS = ['replyto-mismatch', 'returnpath-mismatch', 'name-mismatch', 'lookalike', 'punycode'];
+  var FLAG_VALUES = LEGACY_FLAGS.concat((EV.ANOMALY_FLAG_IDS || []).filter(function (id) { return LEGACY_FLAGS.indexOf(id) === -1; }));
+  var SCRIPT_FIELDS = { 'script.subject': 'subjectScripts', 'script.body': 'bodyScripts' };
+  var SCRIPT_VALUES = EV.SCRIPT_NAMES || [];
+  var FINANCIAL_TYPES = ['iban', 'swift_bic', 'routing_number', 'crypto_wallet_btc', 'crypto_wallet_eth', 'gift_card_request'];
+  EV.SEARCH_META_VALUES = { 'meta.flag': FLAG_VALUES, 'meta.financial': FINANCIAL_TYPES, 'script.subject': SCRIPT_VALUES, 'script.body': SCRIPT_VALUES };
+
   // field:/pattern/i — supported only on fields whose raw (untokenized)
   // string is retained per-file (checked below), since regex needs to run
   // against the real text, not word postings. Not anchored to word
@@ -82,6 +102,11 @@
   var SIZE_UNIT_MULTIPLIER = { b: 1, kb: 1024, mb: 1024 * 1024, gb: 1024 * 1024 * 1024 };
   // query field name -> internal per-file numeric array name
   var NUMERIC_FIELDS = { 'attachment.count': 'attCounts', size: 'sizes', urls: 'urlCounts', recipients: 'recipientCounts', duplicates: 'duplicateCounts', urgency: 'urgencyScores' };
+  // Every field name the query grammar recognizes, for the search box's autocomplete (js/ui/searchSuggest.js)
+  // -- derived from the same tables the parser uses, plus the special-cased clause types, so a suggestion
+  // can never offer a field the parser doesn't understand (tests/searchSuggest.test.js checks both ways).
+  EV.SEARCH_FIELD_NAMES = Object.keys(QUERY_FIELD_MAP).concat(Object.keys(NUMERIC_FIELDS), Object.keys(META_FIELDS), Object.keys(SCRIPT_FIELDS),
+    ['tag', 'attachment.ext', 'attachment.sha256', 'header.messageid', 'auth.spf', 'auth.dkim', 'auth.dmarc']);
   var NUMERIC_VALUE_RE = /^(>=|<=|!=|>|<|=)?\s*([0-9]+(?:\.[0-9]+)?)\s*(b|kb|mb|gb)?$/i;
 
   EV.createSearchIndex = function (pool) {
@@ -104,19 +129,47 @@
     var urlDomainsPerFile = [];
     var attExtsPerFile = [];
     var attSha256PerFile = [];
+    var attExtCounts = new Map(); // extension -> how many emails have one, maintained as emails are ingested (feeds autocomplete)
     var attNamesRaw = [];
+    var attNameLists = []; // each email's attachment filenames as a list, so a regex's ^ and $ apply to ONE filename
     var nameMismatchFlags = [];
     var lookalikeDomainFlags = [];
     var punycodeSenderFlags = [];
     var urgencyScores = [];
     var financialIndicatorsPerFile = [];
     var domainCategoriesPerFile = [];
+    var replyToDomains = [];
+    var returnPathDomains = [];
+    var originIps = [];       // earliest public IP in each email's Received chain (meta.originip:)
+    var connectingIps = [];   // newest public IP: the machine that connected to the receiving side (meta.connectingip:)
+    var replyToMismatchFlags = [];
+    var returnPathMismatchFlags = [];
+    var categoryCounts = new Map(); // domain category -> how many emails have it (feeds autocomplete)
+    var anomalyFlagsPerFile = [];   // ids of every Security-checklist flag/note per email (meta.flag:)
+    var subjectScriptsPerFile = []; // scripts found in each subject / body (script.subject: / script.body:)
+    var bodyScriptsPerFile = [];
     var emailIds = [];
     var skippedFileList = []; // [{path, reason}] -- files that failed to parse or were too large, surfaced in the UI instead of only folded into a count
     var authInfo = []; // { spf, dkim, dmarc }
     var fieldIndex = {};
     FIELDS.forEach(function (f) { fieldIndex[f] = new Map(); });
     var pathToFileId = new Map();
+    // Decoded text kept (lowercased) so a search can match ANY substring in the body / URLs / headers
+    // / OCR text, not just whole indexed words. Bounded by a total character budget: emails that
+    // arrive after it's used up aren't retained and fall back to whole-word matching via the token
+    // postings (textCoverage() reports how many are retained, and the search status line says so).
+    var RETAINED_TEXT_BUDGET_CHARS = 300000000;
+    var retainedBudget = RETAINED_TEXT_BUDGET_CHARS;
+    var bodyTexts = [];
+    var urlTexts = [];
+    var hdrTexts = [];
+    var ocrTexts = [];
+    var retainedFlags = [];
+    var retainedChars = 0;
+    var retainedDocs = 0;
+    var headerIndex = new Map(); // header name -> Map(token -> fileIds), only for emails NOT retained
+    var headerNameCounts = new Map();
+    var MAX_HEADER_NAMES = 300;
     // Which fileIds currently have OCR postings in fieldIndex.ocr -- see addOcrText below.
     // Sparse by design: only ever contains a fileId once a user has actually clicked
     // "Extract text (OCR)" on one of its attachments, never the whole indexed corpus.
@@ -201,13 +254,28 @@
       urlDomainsPerFile[doc.fileId] = doc.urlDomains || [];
       attExtsPerFile[doc.fileId] = doc.attExts || [];
       attSha256PerFile[doc.fileId] = doc.attSha256s || [];
+      var seenExts = {};
+      (doc.attExts || []).forEach(function (e) {
+        if (e && e !== '(none)' && !seenExts[e]) { seenExts[e] = true; attExtCounts.set(e, (attExtCounts.get(e) || 0) + 1); }
+      });
       attNamesRaw[doc.fileId] = doc.attNames || '';
+      attNameLists[doc.fileId] = doc.attNameList || (doc.attNames ? [doc.attNames] : []);
       nameMismatchFlags[doc.fileId] = !!doc.nameMismatch;
       lookalikeDomainFlags[doc.fileId] = !!doc.lookalikeDomain;
       punycodeSenderFlags[doc.fileId] = !!doc.punycodeSender;
       urgencyScores[doc.fileId] = doc.urgencyScore || 0;
       financialIndicatorsPerFile[doc.fileId] = doc.financialIndicators || [];
       domainCategoriesPerFile[doc.fileId] = doc.domainCategories || [];
+      (doc.domainCategories || []).forEach(function (c) { categoryCounts.set(c, (categoryCounts.get(c) || 0) + 1); });
+      anomalyFlagsPerFile[doc.fileId] = doc.anomalyFlags || [];
+      subjectScriptsPerFile[doc.fileId] = doc.subjectScripts || [];
+      bodyScriptsPerFile[doc.fileId] = doc.bodyScripts || [];
+      replyToDomains[doc.fileId] = doc.replyToDomain || '';
+      returnPathDomains[doc.fileId] = doc.returnPathDomain || '';
+      originIps[doc.fileId] = doc.originIp || '';
+      connectingIps[doc.fileId] = doc.connectingIp || '';
+      replyToMismatchFlags[doc.fileId] = !!doc.replyToMismatch;
+      returnPathMismatchFlags[doc.fileId] = !!doc.returnPathMismatch;
       emailIds[doc.fileId] = doc.emailId || null;
       authInfo[doc.fileId] = { spf: doc.spf, dkim: doc.dkim, dmarc: doc.dmarc };
       pathToFileId.set(doc.path, doc.fileId);
@@ -216,22 +284,63 @@
         skippedFileList.push({ path: doc.path, reason: doc.error || doc.subject || 'skipped' });
         return;
       }
+      var hasTexts = doc.bodyLc !== undefined;
+      var cost = 0;
+      if (hasTexts) {
+        cost = (doc.bodyLc || '').length + (doc.urlsLc || '').length;
+        Object.keys(doc.headerTextsLc || {}).forEach(function (n) { cost += doc.headerTextsLc[n].length; });
+      }
+      // A body cut off at the per-email cap isn't retained at all (its tail would be unsearchable) -- it keeps the whole-word postings instead.
+      var retained = hasTexts && !doc.bodyTruncated && retainedChars + cost <= retainedBudget;
+      if (retained) {
+        bodyTexts[doc.fileId] = doc.bodyLc || '';
+        urlTexts[doc.fileId] = doc.urlsLc || '';
+        hdrTexts[doc.fileId] = doc.headerTextsLc || {};
+        retainedFlags[doc.fileId] = true;
+        retainedChars += cost;
+        retainedDocs++;
+      }
+      Object.keys(hasTexts ? (doc.headerTextsLc || {}) : (doc.headerTokens || {})).forEach(function (n) {
+        if (n !== '*') headerNameCounts.set(n, (headerNameCounts.get(n) || 0) + 1);
+      });
       var ft = doc.fieldTokens || {};
       FIELDS.forEach(function (field) {
+        // Retained emails' body/URL text is substring-searched directly, so their word postings for
+        // those two (the biggest ones) are skipped -- saves memory; non-retained emails keep them.
+        if (retained && (field === 'body' || field === 'url')) return;
         (ft[field] || []).forEach(function (tok) { addPosting(field, tok, doc.fileId); });
       });
+      if (!retained) {
+        var ht = doc.headerTokens || {};
+        Object.keys(ht).forEach(function (name) {
+          var map = name === '*' ? fieldIndex.meta : headerIndex.get(name);
+          if (!map) {
+            if (headerIndex.size >= MAX_HEADER_NAMES) map = fieldIndex.meta;
+            else { map = new Map(); headerIndex.set(name, map); }
+          }
+          ht[name].forEach(function (tok) {
+            var arr = map.get(tok);
+            if (!arr) { arr = []; map.set(tok, arr); }
+            if (arr[arr.length - 1] !== doc.fileId) arr.push(doc.fileId);
+          });
+        });
+      }
     }
 
     function reset() {
       paths = []; subjects = []; fromAddrs = []; fromNames = []; toStrs = [];
       ccStrs = []; bccStrs = []; replyToStrs = []; returnPathStrs = []; messageIds = [];
       dateMs = []; sizes = []; attCounts = []; urlCounts = []; recipientCounts = []; emailIds = []; authInfo = [];
-      fromDomains = []; urlDomainsPerFile = []; attExtsPerFile = []; attSha256PerFile = []; attNamesRaw = []; skippedFileList = [];
+      fromDomains = []; urlDomainsPerFile = []; attExtsPerFile = []; attSha256PerFile = []; attNamesRaw = []; attNameLists = []; skippedFileList = [];
       nameMismatchFlags = []; lookalikeDomainFlags = []; punycodeSenderFlags = [];
       urgencyScores = []; financialIndicatorsPerFile = []; domainCategoriesPerFile = [];
+      replyToDomains = []; returnPathDomains = []; originIps = []; connectingIps = []; replyToMismatchFlags = []; returnPathMismatchFlags = []; categoryCounts = new Map();
+      anomalyFlagsPerFile = []; subjectScriptsPerFile = []; bodyScriptsPerFile = [];
       FIELDS.forEach(function (f) { fieldIndex[f] = new Map(); });
       pathToFileId = new Map();
       ocrCoveredFileIds = new Set();
+      bodyTexts = []; urlTexts = []; hdrTexts = []; ocrTexts = []; retainedFlags = [];
+      retainedChars = 0; retainedDocs = 0; headerIndex = new Map(); headerNameCounts = new Map(); attExtCounts = new Map();
       total = 0; indexedCount = 0; skippedCount = 0; cancelled = false;
     }
 
@@ -249,7 +358,7 @@
 
       return EV.runOverFileEntries(pool, fileEntries, {
         taskType: 'indexBatch',
-        taskOpts: { trustedDomains: opts.trustedDomains || [], domainCategories: opts.domainCategories || [] },
+        taskOpts: { trustedDomains: opts.trustedDomains || [], domainCategories: opts.domainCategories || [], internalDomains: opts.internalDomains || [] },
         batchSize: opts.batchSize || 40,
         concurrency: opts.concurrency,
         isCancelled: function () { return cancelled || epoch !== myEpoch; },
@@ -287,6 +396,7 @@
       var fileId = pathToFileId.get(path);
       if (fileId === undefined || !text) return;
       EV.tokenize(text).forEach(function (tok) { addPosting('ocr', tok, fileId); });
+      ocrTexts[fileId] = (ocrTexts[fileId] ? ocrTexts[fileId] + '\n' : '') + String(text).toLowerCase();
       ocrCoveredFileIds.add(fileId);
     }
 
@@ -294,6 +404,27 @@
      * "not exhaustive" coverage note next to attachment.ocr: search results. */
     function ocrStats() {
       return { coveredCount: ocrCoveredFileIds.size };
+    }
+
+    /** How many indexed emails carry each meta.flag: id (the Security-checklist flags plus the three sender-spoofing flags), for
+     * the Folder overview. One pass over per-file arrays that already exist -- no re-reading of any email. */
+    function flagCounts(groups) {
+      var counts = {}, indexed = 0, grouped = {};
+      groups = groups || {};
+      Object.keys(groups).forEach(function (g) { grouped[g] = 0; });
+      for (var fid = 0; fid < anomalyFlagsPerFile.length; fid++) {
+        var flags = anomalyFlagsPerFile[fid];
+        if (flags === undefined) continue;
+        indexed++;
+        var all = flags.slice();
+        if (nameMismatchFlags[fid]) all.push('name-mismatch');
+        if (lookalikeDomainFlags[fid]) all.push('lookalike');
+        if (punycodeSenderFlags[fid]) all.push('punycode');
+        all.forEach(function (id) { counts[id] = (counts[id] || 0) + 1; });
+        // a group counts an EMAIL once, however many of its flags that email carries
+        Object.keys(groups).forEach(function (g) { if (groups[g].some(function (id) { return all.indexOf(id) !== -1; })) grouped[g]++; });
+      }
+      return { indexed: indexed, counts: counts, groups: grouped };
     }
 
     // ---------- query parsing ----------
@@ -353,7 +484,7 @@
     // One optional dot-segment (e.g. "header.subject", "attachment.count") -- a dot isn't in \w,
     // so this is strictly wider than the old /^\w+/, never narrower; nothing that parsed as a bare
     // word before stops doing so now.
-    var FIELD_NAME_RE = /^[\w]+(?:\.[\w]+)?/;
+    var FIELD_NAME_RE = /^[\w]+(?:\.[\w-]+)?/;
 
     /**
      * Builds the leaf-clause object for a `field:value` match (or returns
@@ -374,13 +505,27 @@
       // (an extension or a Message-ID is matched as a whole value, not word-by-word), so each gets
       // resolved by its own branch in candidatesForClause rather than the generic token-index path.
       if (rawField === 'attachment.ext') {
-        return { field: 'attachment.ext', extMatch: true, text: valueRaw.toLowerCase(), negate: negate };
+        var extText = valueRaw.toLowerCase();
+        if (extText && extText.charAt(0) !== '.') extText = '.' + extText; // "exe" and ".exe" mean the same thing (the autocomplete already accepted both)
+        return { field: 'attachment.ext', extMatch: true, text: extText, negate: negate };
       }
       if (rawField === 'attachment.sha256') {
         return { field: 'attachment.sha256', sha256Match: true, text: valueRaw.trim().toLowerCase(), negate: negate };
       }
       if (rawField === 'header.messageid') {
         return { field: 'header.messageid', exactMatch: true, text: valueRaw.trim().toLowerCase(), negate: negate };
+      }
+      if (SCRIPT_FIELDS.hasOwnProperty(rawField)) {
+        return { field: rawField, scriptMatch: SCRIPT_FIELDS[rawField], text: valueRaw.trim().toLowerCase(), negate: negate };
+      }
+      if (META_FIELDS.hasOwnProperty(rawField)) {
+        return { field: rawField, metaMatch: rawField, text: valueRaw.trim().toLowerCase(), negate: negate };
+      }
+      var authM = /^auth\.(spf|dkim|dmarc)$/.exec(rawField);
+      if (authM) return { field: rawField, authMatch: authM[1], text: valueRaw.trim().toLowerCase(), negate: negate };
+      // header.<any other header name>: -- e.g. header.received:, header.x-mailer:, header.authentication-results:
+      if (rawField.indexOf('header.') === 0 && rawField.length > 7 && !QUERY_FIELD_MAP.hasOwnProperty(rawField)) {
+        return { field: rawField, headerName: rawField.slice(7), text: valueRaw, negate: negate, phrase: isQuoted };
       }
       var field = QUERY_FIELD_MAP.hasOwnProperty(rawField) ? QUERY_FIELD_MAP[rawField] : (rawField === 'tag' ? 'tag' : null);
       if (field) {
@@ -570,8 +715,15 @@
       return Array.from(set);
     }
 
+    /** Header-value postings: the shared 'meta' map plus every per-header-name map (non-retained emails only). */
+    function metaPostings(token) {
+      var parts = [fieldIndex.meta.get(token) || []];
+      headerIndex.forEach(function (m) { var a = m.get(token); if (a) parts.push(a); });
+      return parts.length === 1 ? parts[0] : union(parts);
+    }
     function postingsForToken(field, token) {
-      if (field === 'any') return union(FIELDS.map(function (f) { return fieldIndex[f].get(token) || []; }));
+      if (field === 'meta') return metaPostings(token);
+      if (field === 'any') return union(FIELDS.map(function (f) { return f === 'meta' ? metaPostings(token) : (fieldIndex[f].get(token) || []); }));
       return fieldIndex[field].get(token) || [];
     }
 
@@ -609,6 +761,14 @@
       }
     }
 
+    /** Does `re` match this email's value for a raw-text field? Attachment filenames are tested ONE AT A TIME, so
+     * attachment.filename:/Inv-.*\.pdf$/ means "a filename that ends in .pdf" even when that attachment isn't the
+     * email's last one; every other field is tested as its whole stored text. */
+    function regexHitsField(re, field, fid) {
+      if (field === 'attachment') return (attNameLists[fid] || []).some(function (name) { return re.test(name); });
+      return re.test(fieldRawText(field, fid));
+    }
+
     /** field:/pattern/i — linear-scans the field's raw stored text per indexed file (not the token index). */
     function candidatesForRegexClause(clause) {
       var re;
@@ -620,7 +780,7 @@
       if (RAW_TEXT_FIELDS.indexOf(clause.field) === -1) {
         return { ids: [], warning: 'regex isn’t supported on "' + clause.field + ':" — try header.subject/header.from/header.to/header.cc/header.bcc/header.replyto/header.returnpath/attachment.filename, or Raw search for anything else' };
       }
-      var ids = allIndexedFileIds().filter(function (fid) { return re.test(fieldRawText(clause.field, fid)); });
+      var ids = allIndexedFileIds().filter(function (fid) { return regexHitsField(re, clause.field, fid); });
       return { ids: ids, warning: null };
     }
 
@@ -643,7 +803,7 @@
       allIndexedFileIds().forEach(function (fid) {
         var hit = false;
         RAW_TEXT_FIELDS.forEach(function (f) {
-          if (re.test(fieldRawText(f, fid))) {
+          if (regexHitsField(re, f, fid)) {
             hit = true;
             var list = matchedFieldsById[fid] || (matchedFieldsById[fid] = []);
             if (list.indexOf(f) === -1) list.push(f);
@@ -652,6 +812,42 @@
         if (hit) ids.push(fid);
       });
       return { ids: ids, warning: null, matchedFieldsById: matchedFieldsById };
+    }
+
+    /**
+     * Does this email's text for `field` contain `needle` (already lowercased) as a plain substring?
+     * Covers the raw-text fields (always retained), and the decoded body / URLs / header values / OCR
+     * text for emails whose text is retained (see RETAINED_TEXT_BUDGET_CHARS). `field` may also be
+     * 'any' (every field) or {header: name} (one header's value).
+     */
+    function docContains(field, fid, needle) {
+      var i;
+      if (field && field.header) {
+        var h = hdrTexts[fid];
+        return !!(h && h[field.header] && h[field.header].indexOf(needle) !== -1);
+      }
+      if (field === 'any') {
+        for (i = 0; i < RAW_TEXT_FIELDS.length; i++) if (fieldRawText(RAW_TEXT_FIELDS[i], fid).toLowerCase().indexOf(needle) !== -1) return true;
+        return docContains('body', fid, needle) || docContains('url', fid, needle) || docContains('meta', fid, needle) || docContains('ocr', fid, needle);
+      }
+      if (RAW_TEXT_FIELDS.indexOf(field) !== -1) return fieldRawText(field, fid).toLowerCase().indexOf(needle) !== -1;
+      if (field === 'body') return !!bodyTexts[fid] && bodyTexts[fid].indexOf(needle) !== -1;
+      if (field === 'url') return !!urlTexts[fid] && urlTexts[fid].indexOf(needle) !== -1;
+      if (field === 'ocr') return !!ocrTexts[fid] && ocrTexts[fid].indexOf(needle) !== -1;
+      if (field === 'meta') {
+        var hm = hdrTexts[fid];
+        if (!hm) return false;
+        for (var n in hm) if (hm.hasOwnProperty(n) && hm[n].indexOf(needle) !== -1) return true;
+      }
+      return false;
+    }
+    function substringHits(field, needle) {
+      return allIndexedFileIds().filter(function (fid) { return docContains(field, fid, needle); });
+    }
+    /** True when every piece of text a clause on `field` could match is available for substring search for this email. */
+    function fullyRetained(field, fid) {
+      if (field !== 'any' && field !== 'body' && field !== 'url' && field !== 'meta' && !(field && field.header)) return true;
+      return !!retainedFlags[fid];
     }
 
     /** Resolves one leaf clause to candidate ids -- tag clauses are handled separately by
@@ -674,31 +870,105 @@
         });
         return { ids: shaIds, warning: null };
       }
+      if (clause.scriptMatch) {
+        if (!clause.text) return { ids: [], warning: '"' + clause.field + ':" needs a value, e.g. ' + clause.field + ':cyrillic' };
+        if (SCRIPT_VALUES.indexOf(clause.text) === -1) {
+          return { ids: [], warning: '"' + clause.text + '" is not a known script. Use one of: ' + SCRIPT_VALUES.join(', ') };
+        }
+        var scriptLists = clause.scriptMatch === 'subjectScripts' ? subjectScriptsPerFile : bodyScriptsPerFile;
+        return { ids: allIndexedFileIds().filter(function (fid) { return (scriptLists[fid] || []).indexOf(clause.text) !== -1; }), warning: null };
+      }
+      if (clause.metaMatch) {
+        var mf = clause.metaMatch, mt = clause.text;
+        var example = { 'meta.fromdomain': 'paypal', 'meta.replytodomain': 'gmail.com', 'meta.returnpathdomain': 'bounce', 'meta.urldomain': 'bit.ly',
+          'meta.category': 'shortener', 'meta.flag': 'replyto-mismatch', 'meta.financial': 'iban', 'meta.originip': '203.0.113', 'meta.connectingip': '198.51.100.7' }[mf];
+        if (!mt) return { ids: [], warning: '"' + mf + ':" needs a value, e.g. ' + mf + ':' + example };
+        if (mf === 'meta.flag' && FLAG_VALUES.indexOf(mt) === -1) {
+          return { ids: [], warning: '"' + mt + '" is not a known meta.flag. Use one of: ' + FLAG_VALUES.join(', ') };
+        }
+        var metaIds = allIndexedFileIds().filter(function (fid) {
+          switch (mf) {
+            case 'meta.fromdomain': return (fromDomains[fid] || '').indexOf(mt) !== -1;
+            case 'meta.replytodomain': return (replyToDomains[fid] || '').indexOf(mt) !== -1;
+            case 'meta.returnpathdomain': return (returnPathDomains[fid] || '').indexOf(mt) !== -1;
+            case 'meta.originip': return (originIps[fid] || '').toLowerCase().indexOf(mt) !== -1;
+            case 'meta.connectingip': return (connectingIps[fid] || '').toLowerCase().indexOf(mt) !== -1;
+            case 'meta.urldomain': return (urlDomainsPerFile[fid] || []).some(function (d) { return d.indexOf(mt) !== -1; });
+            case 'meta.category': return (domainCategoriesPerFile[fid] || []).some(function (c) { return c.toLowerCase().indexOf(mt) !== -1; });
+            case 'meta.financial': return (financialIndicatorsPerFile[fid] || []).some(function (t) { return t.indexOf(mt.replace(/[\s-]+/g, '_')) !== -1; });
+            case 'meta.flag':
+              if (mt === 'replyto-mismatch') return !!replyToMismatchFlags[fid];
+              if (mt === 'returnpath-mismatch') return !!returnPathMismatchFlags[fid];
+              if (mt === 'name-mismatch') return !!nameMismatchFlags[fid];
+              if (mt === 'lookalike') return !!lookalikeDomainFlags[fid];
+              if (mt === 'punycode') return !!punycodeSenderFlags[fid];
+              return (anomalyFlagsPerFile[fid] || []).indexOf(mt) !== -1; // every other id comes from the Security checklist
+          }
+          return false;
+        });
+        return { ids: metaIds, warning: null };
+      }
       if (clause.exactMatch) {
         if (!clause.text) return { ids: [], warning: '"header.messageid:" needs a value' };
         var midIds = allIndexedFileIds().filter(function (fid) { return messageIds[fid] === clause.text; });
         return { ids: midIds, warning: null };
       }
-      var tokens = EV.tokenize(clause.text);
-      if (tokens.length === 0) {
+      if (clause.authMatch) {
+        if (!clause.text) return { ids: [], warning: '"' + clause.field + ':" needs a value, e.g. ' + clause.field + ':fail (or :pass, :softfail, :none, :missing)' };
+        var skipped = new Set(skippedFileList.map(function (x) { return pathToFileId.get(x.path); }));
+        var authIds = allIndexedFileIds().filter(function (fid) {
+          if (skipped.has(fid)) return false;
+          var a = authInfo[fid];
+          var v = a && a[clause.authMatch] != null ? String(a[clause.authMatch]).toLowerCase() : null;
+          return clause.text === 'missing' ? v === null : v === clause.text;
+        });
+        return { ids: authIds, warning: null };
+      }
+      if (clause.headerName) {
+        var hneedle = String(clause.text || '').trim().toLowerCase();
+        if (!headerNameCounts.has(clause.headerName)) {
+          return { ids: [], warning: 'no indexed email has a "' + clause.headerName + '" header — matched nothing' };
+        }
+        if (hneedle.length < 2) {
+          return { ids: [], warning: '"' + clause.text + '" is too short to search on (minimum 2 characters) — matched nothing rather than everything' };
+        }
+        var hits = substringHits({ header: clause.headerName }, hneedle);
+        var hmap = headerIndex.get(clause.headerName);
+        var htokens = EV.tokenize(clause.text);
+        if (hmap && htokens.length) {
+          var hsets = htokens.map(function (t) { return hmap.get(t) || []; });
+          hsets.sort(function (a, b) { return a.length - b.length; });
+          var hids = hsets[0];
+          for (var hi = 1; hi < hsets.length; hi++) hids = intersect(hids, hsets[hi]);
+          hits = union([hits, hids]);
+        }
+        return { ids: hits, warning: null };
+      }
+      var needle = String(clause.text || '').trim().toLowerCase();
+      if (needle.length < 2) {
         return { ids: [], warning: '"' + clause.text + '" is too short to search on (minimum 2 characters) — matched nothing rather than everything' };
       }
-      var sets = tokens.map(function (t) { return postingsForToken(clause.field, t); });
-      sets.sort(function (a, b) { return a.length - b.length; });
-      var result = sets[0] || [];
-      for (var i = 1; i < sets.length; i++) result = intersect(result, sets[i]);
-      // The inverted index is case-folded, so exact-case verification (a quoted phrase, always;
-      // or ANY term while the "Match Case" toggle is on) can only be checked against the
-      // fields with retained raw text -- same scope regex is limited to, above.
+      // Anything typed matches as a plain substring wherever the text is available; the token index
+      // covers emails whose text isn't retained (and is the cheap exact path for the rest).
+      var tokens = EV.tokenize(clause.text);
+      var tokenIds = null;
+      if (tokens.length) {
+        var sets = tokens.map(function (t) { return postingsForToken(clause.field, t); });
+        sets.sort(function (a, b) { return a.length - b.length; });
+        tokenIds = sets[0] || [];
+        for (var i = 1; i < sets.length; i++) tokenIds = intersect(tokenIds, sets[i]);
+        // A quoted phrase needs its words adjacent: for emails whose text is retained that's checked
+        // exactly by the substring pass, so only trust the looser all-words-present token match for
+        // emails whose text isn't retained.
+        if (clause.phrase) tokenIds = tokenIds.filter(function (fid) { return !fullyRetained(clause.field, fid); });
+      }
+      var result = tokenIds ? union([substringHits(clause.field, needle), tokenIds]) : substringHits(clause.field, needle);
+      // Exact-case verification ("Match Case") can only be checked against the fields with retained
+      // raw text -- same scope regex is limited to, above.
       var verifiableField = RAW_TEXT_FIELDS.indexOf(clause.field) !== -1 || clause.field === 'any';
-      if (verifiableField && (clause.phrase || opts.caseSensitive)) {
-        var needle = opts.caseSensitive ? clause.text : clause.text.toLowerCase();
+      if (verifiableField && opts.caseSensitive) {
         result = result.filter(function (fid) {
-          return RAW_TEXT_FIELDS.some(function (f) {
-            var t = fieldRawText(f, fid);
-            if (!opts.caseSensitive) t = t.toLowerCase();
-            return t.indexOf(needle) !== -1;
-          });
+          return RAW_TEXT_FIELDS.some(function (f) { return fieldRawText(f, fid).indexOf(clause.text) !== -1; });
         });
       }
       return { ids: result, warning: null };
@@ -773,7 +1043,7 @@
           var clause = node.clause;
           var ids;
           if (clause.field === 'tag') {
-            var fids = ctx.tagFileIdSets.get(clause.text);
+            var fids = ctx.tagFileIdSets.get(String(clause.text).toLowerCase()); // tag names are always lowercase
             ids = fids ? Array.from(fids) : [];
           } else {
             var resolved = candidatesForClause(clause, ctx.opts);
@@ -903,7 +1173,26 @@
       ingestDocForTest: ingestDoc,
       resetForTest: reset,
       addOcrText: addOcrText,
+      /** Attachment extensions seen in this folder (with the leading dot), most common first -- feeds autocomplete. */
+      attachmentExts: function () {
+        return Array.from(attExtCounts.entries()).map(function (e) { return { name: e[0], count: e[1] }; })
+          .sort(function (a, b) { return b.count - a.count || (a.name < b.name ? -1 : 1); });
+      },
+      /** Domain categories seen in this folder with how many emails have each -- feeds meta.category: autocomplete. */
+      categoryNames: function () {
+        return Array.from(categoryCounts.entries()).map(function (e) { return { name: e[0], count: e[1] }; })
+          .sort(function (a, b) { return b.count - a.count || (a.name < b.name ? -1 : 1); });
+      },
+      /** Header names seen in this folder, most common first -- feeds the search help panel. */
+      headerNames: function () {
+        return Array.from(headerNameCounts.entries()).map(function (e) { return { name: e[0], count: e[1] }; })
+          .sort(function (a, b) { return b.count - a.count || (a.name < b.name ? -1 : 1); });
+      },
+      /** How many indexed emails have their decoded text retained for any-substring search (rest: whole-word only). */
+      textCoverage: function () { return { retained: retainedDocs, total: allIndexedFileIds().length - skippedCount }; },
+      setRetainedBudgetForTest: function (n) { retainedBudget = n; },
       ocrStats: ocrStats,
+      flagCounts: flagCounts,
       isRunning: function () { return running; },
       stats: function () { return { total: total, indexed: indexedCount, skipped: skippedCount }; },
       skippedFiles: function () { return skippedFileList.slice(); },
@@ -944,6 +1233,8 @@
        */
       iocSummary: function (pathSet) {
         var senderDomains = new Map();
+        var originIpCounts = new Map();
+        var connectingIpCounts = new Map();
         var urlDomains = new Map();
         var attExts = new Map();
         var financialIndicatorTypes = new Map();
@@ -954,6 +1245,8 @@
           if (paths[fid] === undefined) continue; // hole from in-progress indexing
           if (pathSet && !pathSet.has(paths[fid])) continue;
           bump(senderDomains, fromDomains[fid]);
+          bump(originIpCounts, originIps[fid]);
+          bump(connectingIpCounts, connectingIps[fid]);
           (urlDomainsPerFile[fid] || []).forEach(function (d) { bump(urlDomains, d); });
           (attExtsPerFile[fid] || []).forEach(function (e) { bump(attExts, e); });
           (financialIndicatorsPerFile[fid] || []).forEach(function (t) { bump(financialIndicatorTypes, t); });
@@ -967,6 +1260,8 @@
         }
         return {
           senderDomains: toSortedArray(senderDomains),
+          originIps: toSortedArray(originIpCounts),
+          connectingIps: toSortedArray(connectingIpCounts),
           urlDomains: toSortedArray(urlDomains),
           attachmentExtensions: toSortedArray(attExts),
           financialIndicatorTypes: toSortedArray(financialIndicatorTypes),

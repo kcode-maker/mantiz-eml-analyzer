@@ -40,15 +40,31 @@
   var decoderCache = {};
   function normalizeCharsetLabel(label) {
     if (!label) return 'utf-8';
-    var l = label.trim().toLowerCase().replace(/^["']|["']$/g, '');
+    var l = label.trim().toLowerCase().replace(/^["']|["']$/g, '').replace(/\*.*$/, '');
     if (l === 'ascii' || l === 'us-ascii' || l === 'ansi_x3.4-1968') return 'windows-1252';
     if (l === 'utf8') return 'utf-8';
-    if (l === 'unicode-1-1-utf-7') return 'utf-8';
+    if (l === 'unicode-1-1-utf-7' || l === 'utf7') return 'utf-7';
     return l;
+  }
+
+  /** RFC 2152 UTF-7: "+" starts a base64 run of UTF-16BE, "-" ends it, "+-" is a literal plus. Browsers' TextDecoder has no
+   * UTF-7, and it is a classic way to hide text from filters, so it is decoded here instead of being shown as "+AGE-". */
+  function decodeUtf7(bytes) {
+    var ascii = bytesToBinaryString(bytes);
+    return ascii.replace(/\+([A-Za-z0-9+\/]*)-?/g, function (m, b64) {
+      if (!b64) return '+';
+      try {
+        var raw = atob(b64 + '===='.slice(0, (4 - (b64.length % 4)) % 4));
+        var out = '';
+        for (var i = 0; i + 1 < raw.length; i += 2) out += String.fromCharCode((raw.charCodeAt(i) << 8) | raw.charCodeAt(i + 1));
+        return out;
+      } catch (e) { return m; }
+    });
   }
 
   function decodeTextBytes(bytes, charsetLabel) {
     var label = normalizeCharsetLabel(charsetLabel);
+    if (label === 'utf-7') return decodeUtf7(bytes);
     var order = [label, 'utf-8', 'windows-1252'];
     for (var i = 0; i < order.length; i++) {
       var name = order[i];
@@ -71,25 +87,63 @@
 
   // ---------- RFC 2047 encoded-word decoding (headers) ----------
 
-  var ENC_WORD_RE = /=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g;
+  var ENC_WORD_SRC = '=\\?([^?\\s]+)\\?([BbQq])\\?([^?]*)\\?=';
+
+  function encodedWordBytes(enc, data) {
+    if (enc.toLowerCase() === 'b') {
+      var b64 = data.replace(/\s+/g, '');
+      b64 += '===='.slice(0, (4 - (b64.length % 4)) % 4); // senders often drop the padding
+      return binaryStringToBytes(atob(b64));
+    }
+    return qpDecodeToBytes(data.replace(/_/g, ' '), true);
+  }
+
+  /** Text OUTSIDE encoded words: real-world senders (and phishing kits) put raw UTF-8 bytes straight into headers. */
+  function decodeRawHeaderBytes(str) {
+    var hasHighBit = false;
+    for (var i = 0; i < str.length; i++) { if (str.charCodeAt(i) > 127) { hasHighBit = true; break; } }
+    if (!hasHighBit) return str;
+    for (var k = 0; k < str.length; k++) if (str.charCodeAt(k) > 255) return str; // already real Unicode, not bytes
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(binaryStringToBytes(str)); } catch (e) { return str; }
+  }
 
   function decodeEncodedWords(str) {
     if (!str || str.indexOf('=?') === -1) return str;
-    // collapse whitespace that sits *only* between two adjacent encoded-words
-    var collapsed = str.replace(/\?=[ \t\r\n]+=\?/g, '?==?');
-    return collapsed.replace(ENC_WORD_RE, function (m, charset, enc, data) {
-      try {
-        var bytes;
-        if (enc.toLowerCase() === 'b') {
-          bytes = binaryStringToBytes(atob(data.replace(/\s+/g, '')));
-        } else {
-          bytes = qpDecodeToBytes(data.replace(/_/g, ' '), true);
-        }
-        return decodeTextBytes(bytes, charset);
-      } catch (e) {
-        return m;
+    var re = new RegExp(ENC_WORD_SRC, 'g');
+    var out = '', last = 0, m;
+    var pending = null; // {charset, parts: [Uint8Array]} -- a run of adjacent encoded words with one charset
+    function flush() {
+      if (!pending) return;
+      var total = 0, i, j, pos = 0;
+      for (i = 0; i < pending.parts.length; i++) total += pending.parts[i].length;
+      var all = new Uint8Array(total);
+      for (j = 0; j < pending.parts.length; j++) { all.set(pending.parts[j], pos); pos += pending.parts[j].length; }
+      out += decodeTextBytes(all, pending.charset);
+      pending = null;
+    }
+    while ((m = re.exec(str))) {
+      var gap = str.slice(last, m.index);
+      var bytes = null;
+      try { bytes = encodedWordBytes(m[2], m[3]); } catch (e) { bytes = null; }
+      if (bytes === null) { // not a decodable word: keep it as plain text
+        flush();
+        out += decodeRawHeaderBytes(gap) + m[0];
+        last = re.lastIndex;
+        continue;
       }
-    });
+      var charset = normalizeCharsetLabel(m[1]);
+      if (pending && /^[ \t\r\n]*$/.test(gap) && pending.charset === charset) {
+        pending.parts.push(bytes); // whitespace only between two words of the same charset disappears, per RFC 2047
+      } else {
+        var adjacentWords = pending && /^[ \t\r\n]*$/.test(gap);
+        flush();
+        if (!adjacentWords) out += decodeRawHeaderBytes(gap);
+        pending = { charset: charset, parts: [bytes] };
+      }
+      last = re.lastIndex;
+    }
+    flush();
+    return out + decodeRawHeaderBytes(str.slice(last));
   }
 
   EV.decodeEncodedWords = decodeEncodedWords;
@@ -111,6 +165,7 @@
       if (str.charCodeAt(i) > 127) { hasHighBit = true; break; }
     }
     if (!hasHighBit) return str;
+    for (var k = 0; k < str.length; k++) if (str.charCodeAt(k) > 255) return str; // already real Unicode, not raw bytes
     try {
       var bytes = binaryStringToBytes(str);
       var dec = new TextDecoder('utf-8', { fatal: true });
@@ -121,6 +176,47 @@
   }
 
   EV.decodeHeaderText = decodeHeaderText;
+
+  // A parameter that is percent-encoded and/or split into continuations: `name*=utf-8''%E2%82%AC.pdf`, `name*0*=..; name*1*=..`.
+  var EXT_PARAM_RE = /;(\s*)([A-Za-z0-9\-]+)(?:\*(\d+)(\*)?|(\*))\s*=\s*("(?:[^"\\]|\\.)*"|[^;]*)/g;
+
+  /**
+   * A header value exactly as a person should read it: RFC 2047 encoded words (any charset, B or Q, split across words),
+   * RFC 2231 parameters (charset'lang'%XX, with or without continuations) and raw UTF-8 bytes all decoded to plain text.
+   * Used by the Headers tab; the Raw tab still shows the original bytes. Never throws; undecodable parts stay as they were.
+   */
+  EV.decodeHeaderForDisplay = function (value) {
+    var v = String(value == null ? '' : value);
+    if (v.indexOf('*') === -1 && v.indexOf('=?') === -1 && !/[^\x00-\x7F]/.test(v)) return v;
+    var groups = {}, matches = [], m;
+    var re = new RegExp(EXT_PARAM_RE.source, 'g');
+    while ((m = re.exec(v)) && matches.length < 200) {
+      var key = m[2].toLowerCase();
+      var seg = { index: m.index, length: m[0].length, ws: m[1], name: m[2], key: key, cont: m[3] == null ? null : parseInt(m[3], 10), ext: !!(m[4] || m[5]), raw: m[6] };
+      matches.push(seg);
+      (groups[key] = groups[key] || []).push(seg);
+    }
+    var out = '', last = 0;
+    matches.forEach(function (seg) {
+      out += decodeHeaderText(v.slice(last, seg.index));
+      last = seg.index + seg.length;
+      var group = groups[seg.key];
+      if (group[0] !== seg) return; // later continuation: already folded into the first one
+      var charset = 'utf-8', joined = '', anyExt = false;
+      group.slice().sort(function (a, b) { return (a.cont || 0) - (b.cont || 0); }).forEach(function (g, i) {
+        var val = g.raw.charAt(0) === '"' ? g.raw.replace(/^"|"$/g, '') : g.raw.trim();
+        if (g.ext) {
+          var parts = val.split("'");
+          if (i === 0 && parts.length >= 3) { charset = parts[0] || 'utf-8'; val = parts.slice(2).join("'"); }
+          anyExt = true;
+          joined += val;
+        } else joined += val.replace(/%/g, '%25');
+      });
+      var text = anyExt ? decodeTextBytes(percentBytes(joined), charset) : decodeHeaderText(joined);
+      out += ';' + seg.ws + seg.name + '="' + text.replace(/"/g, '\\"') + '"';
+    });
+    return out + decodeHeaderText(v.slice(last));
+  };
 
   // ---------- quoted-printable ----------
 
@@ -192,6 +288,17 @@
   // the real filename instead of falling back to a synthesized "attachment-N"
   // name for any message whose filename needed continuation (long/non-ASCII
   // names commonly do).
+  /** "%E9t%E9" -> bytes. Anything that is not a %XX escape is taken as the byte it already is. */
+  function percentBytes(str) {
+    var bytes = [];
+    for (var i = 0; i < str.length; i++) {
+      var c = str.charAt(i);
+      if (c === '%' && /^[0-9A-Fa-f]{2}$/.test(str.substr(i + 1, 2))) { bytes.push(parseInt(str.substr(i + 1, 2), 16)); i += 2; }
+      else bytes.push(str.charCodeAt(i) & 0xff);
+    }
+    return new Uint8Array(bytes);
+  }
+
   function parseParams(rest) {
     var params = {};
     var decodedKeys = {};
@@ -212,8 +319,9 @@
       var val = rawVal;
       if (isExtended) {
         var parts = rawVal.split("'");
-        if (parts.length === 3) {
-          try { val = decodeURIComponent(parts[2]); decodedKeys[baseKey] = true; } catch (e) { val = rawVal; }
+        if (parts.length >= 3) { // charset'language'percent-encoded-text -- the charset is not always UTF-8 (iso-8859-1, gb2312...)
+          val = decodeTextBytes(percentBytes(parts.slice(2).join("'")), parts[0] || 'utf-8');
+          decodedKeys[baseKey] = true;
         }
       }
       if (!(baseKey in params)) params[baseKey] = val;
@@ -222,8 +330,9 @@
       if (baseKey in params) return; // a plain/single-extended value already claimed this key
       var segs = continuations[baseKey];
       var indices = Object.keys(segs).map(Number).sort(function (a, b) { return a - b; });
-      var out = '';
-      var anyDecoded = false;
+      var anyDecoded = false, charset = 'utf-8', joined = '';
+      // Percent-escapes become bytes and the whole value is decoded once at the end, so a character whose bytes are split
+      // across two continuation segments still decodes correctly.
       indices.forEach(function (idx) {
         var seg = segs[idx];
         var val = seg.raw;
@@ -231,12 +340,14 @@
           // Only the first encoded segment carries the charset'lang' prefix;
           // later segments are pure percent-encoded continuations of it.
           var parts = val.split("'");
-          if (idx === indices[0] && parts.length === 3) val = parts[2];
-          try { val = decodeURIComponent(val); anyDecoded = true; } catch (e) { /* keep this segment raw on decode failure */ }
+          if (idx === indices[0] && parts.length >= 3) { charset = parts[0] || 'utf-8'; val = parts.slice(2).join("'"); }
+          anyDecoded = true;
+          joined += val;
+        } else {
+          joined += val.replace(/%/g, '%25'); // a plain segment is literal text, even if it contains a percent sign
         }
-        out += val;
       });
-      params[baseKey] = out;
+      params[baseKey] = anyDecoded ? decodeTextBytes(percentBytes(joined), charset) : joined;
       if (anyDecoded) decodedKeys[baseKey] = true;
     });
     markDecodedKeys(params, decodedKeys);
